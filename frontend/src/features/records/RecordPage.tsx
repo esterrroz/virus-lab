@@ -12,13 +12,17 @@ import { useSenders } from "../../shared/useSenders";
 import { DocumentPreview } from "../preview/DocumentPreview";
 import { fieldHighlight } from "../preview/previewPages";
 import { useFieldFocus } from "../preview/useFieldFocus";
+import { Skeleton } from "../../shared/ui/Skeleton";
 import { ApproveButton } from "../review/ApproveButton";
 import { DeleteButton } from "../review/DeleteButton";
+import { DuplicateNotice } from "../review/DuplicateNotice";
 import { FieldCell } from "../review/FieldCell";
 import { keepCentrals, useRecordMutations, type FieldEdit, type Saved } from "../review/recordMutations";
 import { FIELD_COLUMNS, FORM_TYPE_TEXT } from "../review/reviewRows";
 import "../review/ReviewTable.css";
 import { formatDateTime, statusView } from "./format";
+import { RecordHistory } from "./RecordHistory";
+import { useRecordHistory } from "./useRecordHistory";
 import type { BackTo } from "./RecordsTable";
 import "./RecordsPage.css";
 
@@ -62,7 +66,18 @@ export function RecordPage() {
     </Link>
   );
 
-  if (loaded === null || loaded.id !== request) return <p className="records-empty">טוען…</p>;
+  if (loaded === null || loaded.id !== request) {
+    return (
+      <div className="record-page is-loading">
+        <div className="record-main">
+          <div className="record-card">
+            <Skeleton rows={9} label="טוען את הרשומה…" />
+          </div>
+        </div>
+        <div className="record-loading-page" aria-hidden="true" />
+      </div>
+    );
+  }
   if ("notFound" in loaded) {
     return (
       <div className="records-empty">
@@ -104,6 +119,7 @@ function RecordDetails({ record, backLink, back, onRecord }: DetailsProps) {
   );
   const { saveField, saveCentrals, approve, remove } = useRecordMutations(onRecords);
   const status = statusView(record);
+  const history = useRecordHistory(record.record_id, record.version);
   const more = record.continuation_pages ?? [];
   const editable = record.status === "pending";
   const name = [record.fields.first_name.value, record.fields.last_name.value].filter(Boolean).join(" ");
@@ -130,30 +146,47 @@ function RecordDetails({ record, backLink, back, onRecord }: DetailsProps) {
     <div className="record-page">
       <div className="record-main">
         {backLink}
-        <h1 className="records-title">
-          <bdi>{name || "ללא שם"}</bdi>
-        </h1>
-        <div className="record-actions">
-          <ApproveButton record={record} onApprove={approve} />
-          <DeleteButton record={record} onDelete={remove} onDeleted={() => navigate(back, { replace: true })} />
-        </div>
-        <p className={`records-status is-${status.tone}`}>
-          <span aria-hidden="true">{status.icon}</span>{" "}
-          {record.status === "approved" && record.approved_at
-            ? `אושר ב־${formatDateTime(record.approved_at)}`
-            : status.text}
-        </p>
-        <dl className="record-meta">
-          <dt>קובץ</dt>
-          <dd>
-            <bdi>{record.source_file}</bdi>, עמוד {record.page_number}
-            {more.length > 0 && ` (ועמודים ${more.join(", ")})`}
-          </dd>
-          <dt>סוג טופס</dt>
-          <dd>{FORM_TYPE_TEXT[record.form_type]}</dd>
-          <dt>נקלט</dt>
-          <dd>{formatDateTime(record.created_at)}</dd>
-        </dl>
+        <header className="record-summary">
+          <div className="record-head">
+            <span className="record-avatar" aria-hidden="true">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="8" r="4" />
+                <path d="M4 21c0-4 3.6-7 8-7s8 3 8 7" />
+              </svg>
+            </span>
+            <h1 className="records-title">
+              <bdi>{name || "ללא שם"}</bdi>
+            </h1>
+            <p className={`records-status is-${status.tone}`}>
+              <span aria-hidden="true">{status.icon}</span>{" "}
+              {record.status === "approved" && record.approved_by
+                ? `אושר על ידי ${record.approved_by} ב־${formatDateTime(record.approved_at)}`
+                : status.text}
+            </p>
+            <div className="record-actions">
+              <ApproveButton record={record} onApprove={approve} />
+              <DeleteButton record={record} onDelete={remove} onDeleted={() => navigate(back, { replace: true })} />
+              <RecordHistory history={history} />
+            </div>
+          </div>
+          <dl className="record-meta">
+            <div>
+              <dt>קובץ</dt>
+              <dd title={record.source_file}>
+                <bdi>{record.source_file}</bdi>, עמוד {record.page_number}
+                {more.length > 0 && ` (ועמודים ${more.join(", ")})`}
+              </dd>
+            </div>
+            <div>
+              <dt>סוג טופס</dt>
+              <dd>{FORM_TYPE_TEXT[record.form_type]}</dd>
+            </div>
+            <div>
+              <dt>נקלט</dt>
+              <dd>{formatDateTime(record.created_at)}</dd>
+            </div>
+          </dl>
+        </header>
 
         {record.issues.length > 0 && (
           <ul className="record-issues" aria-label="בעיות ברשומה">
@@ -163,15 +196,15 @@ function RecordDetails({ record, backLink, back, onRecord }: DetailsProps) {
           </ul>
         )}
 
-        <div className="records-scroll">
+        <DuplicateNotice record={record} />
+
+        <div className="record-card">
           <table className="records-table record-fields" {...areaProps}>
             <thead>
               <tr>
                 <th scope="col">שדה</th>
                 <th scope="col">ערך ורמת ביטחון</th>
                 <th scope="col">מה נקרא בטופס</th>
-                <th scope="col">ראיה</th>
-                <th scope="col">בעיות</th>
               </tr>
             </thead>
             <tbody>
@@ -189,20 +222,31 @@ function RecordDetails({ record, backLink, back, onRecord }: DetailsProps) {
                     onSave={onSave}
                     options={title === "גורם שולח" && senders.length > 0 ? senders : undefined}
                   />
-                  <td>
-                    <bdi>{field.raw ?? "—"}</bdi>
+                  {/* What was read and how on one line (the evidence whole in the
+                      tooltip), then the issues, never cut. */}
+                  <td className="record-read">
+                    <span className="record-read-line" title={field.evidence ?? undefined}>
+                      <span className="record-raw">
+                        <bdi>{field.raw ?? "—"}</bdi>
+                      </span>
+                      {/* dir="auto": English evidence is cut at its end, not its start. */}
+                      {field.evidence && (
+                        <span className="record-evidence" dir="auto">
+                          {field.evidence}
+                        </span>
+                      )}
+                    </span>
+                    {field.issues.length > 0 && (
+                      <span className="record-field-issues">{field.issues.map((i) => i.message).join(" · ")}</span>
+                    )}
                   </td>
-                  <td className="record-evidence">
-                    <bdi>{field.evidence ?? "—"}</bdi>
-                  </td>
-                  <td>{field.issues.map((i) => i.message).join(" · ") || "—"}</td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
       </div>
-      <DocumentPreview record={record} highlight={highlight} pointerArea={areaProps} />
+      <DocumentPreview record={record} highlight={highlight} pointerArea={areaProps} fit="page" />
     </div>
   );
 }

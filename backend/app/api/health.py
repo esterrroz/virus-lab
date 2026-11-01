@@ -8,24 +8,53 @@ The number of keys, never a key: a server showing 1 has not picked up
 GEMINI_API_KEYS.
 
 Open without the site password (app/site_password.py): Render's health check
-and the keep-alive ping call it without one.
+and the keep-alive ping call it without one. It reports whether the site password
+is enabled, never the password itself.
+
+It checks the database too, since Render's health check (render.yaml) calls this
+path: a server whose database is down answers 503, so Render doesn't call it
+healthy. Without DATABASE_URL (locally, the CI image check) the database is "off"
+and the answer is still 200.
 
 Owner: A
 """
 
-from typing import Annotated
+import asyncio
+import logging
+from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request, Response
+from psycopg_pool import AsyncConnectionPool
 
 from app.settings import Settings, get_settings
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter()
 
+# Short: Render's own health check gives up after a few seconds.
+DB_CHECK_TIMEOUT_S = 3.0
 
-@router.get("/api/health")
-def health(settings: Annotated[Settings, Depends(get_settings)]) -> dict[str, str | bool | int]:
+DatabaseState = Literal["ok", "off", "unavailable"]
+
+
+@router.get(
+    "/api/health",
+    responses={
+        503: {"description": 'The database is set but does not answer ("database": "unavailable")'}
+    },
+)
+async def health(
+    request: Request,
+    response: Response,
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> dict[str, str | bool | int]:
+    database = await _database_state(getattr(request.app.state, "pool", None))
+    if database == "unavailable":
+        response.status_code = 503
     return {
-        "status": "ok",
+        "status": "error" if database == "unavailable" else "ok",
+        "database": database,
         "extraction_provider": settings.extraction_provider,
         # What get_provider does, not just the setting: the cache is only ever in
         # front of Gemini.
@@ -38,3 +67,17 @@ def health(settings: Annotated[Settings, Depends(get_settings)]) -> dict[str, st
         # showing false is open to anyone with the link.
         "site_password": bool(settings.site_password.get_secret_value()),
     }
+
+
+async def _database_state(pool: AsyncConnectionPool | None) -> DatabaseState:
+    """Whether the database answers SELECT 1 in time; "off" without DATABASE_URL."""
+    if pool is None:
+        return "off"
+    try:
+        async with asyncio.timeout(DB_CHECK_TIMEOUT_S), pool.connection() as conn:
+            await conn.execute("SELECT 1")
+    except Exception as exc:
+        # The type only: a connection error can quote the URL, which holds the password.
+        logger.warning("health: database check failed (%s)", type(exc).__name__)
+        return "unavailable"
+    return "ok"

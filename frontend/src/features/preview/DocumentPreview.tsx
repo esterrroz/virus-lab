@@ -2,7 +2,8 @@
 // highlight, it turns to the page the value was read on and boxes the value there.
 // Owner: A
 
-import { useEffect, useRef, useState, type HTMLAttributes } from "react";
+import { useEffect, useRef, useState, type Dispatch, type HTMLAttributes, type SetStateAction } from "react";
+import { FileName } from "../../shared/FileName";
 import {
   MAX_ZOOM,
   boxStyle,
@@ -24,16 +25,24 @@ interface DocumentPreviewProps {
   highlight?: Highlight | null;
   // Pointer handlers for the whole preview (useFieldFocus's areaProps).
   pointerArea?: Pick<HTMLAttributes<HTMLElement>, "onMouseEnter" | "onMouseLeave">;
+  // What "fit" fits: the width (a short frame that scrolls to the box) or the whole
+  // page in a frame with a set height (the record page). Zooming in starts at 100%.
+  fit?: Fit;
 }
 
-export function DocumentPreview({ record, highlight = null, pointerArea }: DocumentPreviewProps) {
+type Fit = "width" | "page";
+
+export function DocumentPreview({ record, highlight = null, pointerArea, fit = "width" }: DocumentPreviewProps) {
+  // Kept here, above the page, so the zoom the reviewer picked stays from one record
+  // to the next instead of going back to "fit" every time.
+  const [zoom, setZoom] = useState<Zoom>("fit");
   return (
     <section className="preview" aria-labelledby="preview-title" {...pointerArea}>
       <h2 id="preview-title" className="preview-title">הטופס המקורי</h2>
       {record ? (
-        // A different form starts on its first page, fitted to the width. Records of
-        // the same form (one per commitment) share its pages, so page and zoom stay.
-        <Pages key={record.page_id} record={record} highlight={highlight} />
+        // A different form starts on its first page, at the zoom picked before. Records
+        // of the same form (one per commitment) share its pages, so the page stays too.
+        <Pages key={record.page_id} record={record} highlight={highlight} fit={fit} zoom={zoom} setZoom={setZoom} />
       ) : (
         <p className="preview-empty">בחרי שורה בטבלה כדי לראות את הטופס המקורי</p>
       )}
@@ -41,10 +50,17 @@ export function DocumentPreview({ record, highlight = null, pointerArea }: Docum
   );
 }
 
-function Pages({ record, highlight }: { record: ApiRecord; highlight: Highlight | null }) {
+interface PagesProps {
+  record: ApiRecord;
+  highlight: Highlight | null;
+  fit: Fit;
+  zoom: Zoom;
+  setZoom: Dispatch<SetStateAction<Zoom>>;
+}
+
+function Pages({ record, highlight, fit, zoom, setZoom }: PagesProps) {
   const pages = previewPages(record);
   const [index, setIndex] = useState(0);
-  const [zoom, setZoom] = useState<Zoom>("fit");
   const [failed, setFailed] = useState<string | null>(null); // the image URL that did not load
   const frame = useRef<HTMLDivElement>(null);
   const mark = useRef<HTMLDivElement>(null);
@@ -63,6 +79,7 @@ function Pages({ record, highlight }: { record: ApiRecord; highlight: Highlight 
   const at = Math.min(index, pages.length - 1);
   const page = pages[at];
   const boxes = highlight?.boxes.filter((box) => box.page_number === page.pageNumber) ?? [];
+  const wholePage = fit === "page" && zoom === "fit";
   const drawn = page.imageUrl !== null && failed !== page.imageUrl && boxes.length > 0;
 
   // Scroll the frame, never the window, so the first box is in view. Again once the
@@ -82,7 +99,7 @@ function Pages({ record, highlight }: { record: ApiRecord; highlight: Highlight 
   return (
     <>
       <p className="preview-source">
-        <bdi>{record.source_file}</bdi>, עמוד {page.pageNumber}
+        <FileName name={record.source_file} />, עמוד {page.pageNumber}
         {pages.length > 1 && ` (${at + 1} מתוך ${pages.length} בטופס)`}
       </p>
       {/* Always there, a line high, so a note coming or going never moves what is below. */}
@@ -122,26 +139,26 @@ function Pages({ record, highlight }: { record: ApiRecord; highlight: Highlight 
             onClick={() => setZoom("fit")}
             aria-pressed={zoom === "fit"}
           >
-            התאמה לרוחב
+            {fit === "page" ? "עמוד שלם" : "התאמה לרוחב"}
           </button>
           <button
             type="button"
             className="preview-button"
-            onClick={() => setZoom(zoomIn)}
+            onClick={() => setZoom((z) => (fit === "page" && z === "fit" ? 100 : zoomIn(z)))}
             disabled={zoom === MAX_ZOOM}
             aria-label="הגדלה"
           >
             +
           </button>
           <span className="preview-zoom-level" aria-live="polite">
-            {zoom === "fit" ? "רוחב מלא" : `${zoom}%`}
+            {zoom === "fit" ? (fit === "page" ? "" : "רוחב מלא") : zoom === 100 ? "רוחב מלא" : `${zoom}%`}
           </span>
         </div>
       </div>
 
       <div
         ref={frame}
-        className="preview-frame"
+        className={wholePage ? "preview-frame is-page" : "preview-frame"}
         role="region"
         tabIndex={0}
         aria-label="תמונת העמוד. אפשר לגלול עם החיצים"
@@ -152,7 +169,10 @@ function Pages({ record, highlight }: { record: ApiRecord; highlight: Highlight 
           <p className="preview-message" role="alert">לא ניתן להציג את תמונת העמוד</p>
         ) : (
           // The boxes sit on the image's own box, so they follow it through every zoom.
-          <div className="preview-canvas" style={{ inlineSize: zoom === "fit" ? "100%" : `${zoom}%` }}>
+          <div
+            className={wholePage ? "preview-canvas is-page" : "preview-canvas"}
+            style={wholePage ? undefined : { inlineSize: zoom === "fit" ? "100%" : `${zoom}%` }}
+          >
             <img
               key={page.imageUrl}
               className="preview-image"

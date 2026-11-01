@@ -79,6 +79,22 @@ describe("ApproveButton", () => {
     expect(screen.queryByRole("button")).toBeNull();
     expect(screen.getByText("✓ אושר")).toBeTruthy();
   });
+
+  test("nothing left to fix turns the button green, and a flagged one stays plain", () => {
+    renderButton(record());
+    expect(screen.getByRole("button", { name: "אישור" }).className).toBe("is-ready");
+    cleanup();
+
+    renderButton(flaggedRecord());
+    expect(screen.getByRole("button", { name: "אישור" }).className).toBe("");
+  });
+
+  test("an approve waiting for its undo shows as approved", () => {
+    render(<ApproveButton record={record()} onApprove={vi.fn()} queued />);
+
+    expect(screen.queryByRole("button")).toBeNull();
+    expect(screen.getByText("✓ אושר")).toBeTruthy();
+  });
 });
 
 describe("approve", () => {
@@ -90,7 +106,7 @@ describe("approve", () => {
   afterEach(() => vi.unstubAllGlobals());
 
   test("sends the version and puts the approved record in place", async () => {
-    const approved = record({ status: "approved", version: 4 });
+    const approved = record({ status: "approved", version: 4, approved_by: "esty" });
     fetchMock.mockResolvedValue(
       new Response(JSON.stringify(approved), { status: 200, headers: { "Content-Type": "application/json" } }),
     );

@@ -33,6 +33,138 @@
                 }
               }
             }
+          },
+          "503": {
+            "description": "The database is set but does not answer (\"database\": \"unavailable\")"
+          }
+        }
+      }
+    },
+    "/api/v1/auth/login": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Login",
+        "description": "Sign in and set the session cookie (HttpOnly, Secure, SameSite=Strict).",
+        "operationId": "login_api_v1_auth_login_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/User"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Wrong username or password (\"invalid_credentials\")",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Locked after 5 failed logins (\"too_many_attempts\"), see Retry-After",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not from our page (\"origin_not_allowed\")",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/logout": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Logout",
+        "description": "End the session on the server too, so the token is useless even if it leaked.",
+        "operationId": "logout_api_v1_auth_logout_post",
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "403": {
+            "description": "Not from our page (\"origin_not_allowed\")",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/me": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Me",
+        "description": "The signed-in user. The app calls it on load to decide: login screen or app.",
+        "operationId": "me_api_v1_auth_me_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/User"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session (\"unauthenticated\")",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
           }
         }
       }
@@ -40,7 +172,7 @@
     "/api/v1/extract": {
       "post": {
         "summary": "Extract",
-        "description": "Read every page of every file and save it as pending records.\n\nA file or page that fails is reported in `files` / `failed_pages`, and the\nothers go on. When the daily quota runs out, the answer says whether sending\nthe file again is safe:\n- nothing was saved: 503 quota_exhausted, and the file can be sent again;\n- some pages were saved: 200 with quota_exhausted=true and those records.\n  Sending the file again would save them twice.\nOtherwise 200, unless the request itself is unusable (4xx).",
+        "description": "Receive the files and read them in the background: 202 with the job at once.\n\nGET /extract/jobs/{job_id} tells how far it got, and in the end the saved\nrecords, or why there are none. Each form is saved as soon as it is read, so\nclosing the page after this answer loses nothing.\n\nA request that can't be used is refused here, before anything is read (4xx).",
         "operationId": "extract_api_v1_extract_post",
         "requestBody": {
           "content": {
@@ -66,18 +198,28 @@
           "required": true
         },
         "responses": {
-          "200": {
+          "202": {
             "description": "Successful Response",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ExtractResponse"
+                  "$ref": "#/components/schemas/ExtractJob"
                 }
               }
             }
           },
           "400": {
             "description": "No files (\"no_files\"), more than MAX_FILES_PER_REQUEST (\"too_many_files\"), or an upload that is cut off or broken (\"invalid_upload\")",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in (\"unauthenticated\"). Nothing was read, so the file can be sent again",
             "content": {
               "application/json": {
                 "schema": {
@@ -97,7 +239,7 @@
             }
           },
           "413": {
-            "description": "Request over MAX_REQUEST_MB (\"request_too_large\") or over MAX_PAGES_PER_REQUEST (\"too_many_pages\")",
+            "description": "Request over MAX_REQUEST_MB (\"request_too_large\"). Too many pages is found only once the files are split: the job ends with \"too_many_pages\"",
             "content": {
               "application/json": {
                 "schema": {
@@ -117,11 +259,61 @@
             }
           },
           "503": {
-            "description": "The daily Gemini quota ran out before any page was saved (\"quota_exhausted\"): nothing was saved, so the file can be sent again. Also when the database is not reachable (\"database_unavailable\")",
+            "description": "The database is not reachable (\"database_unavailable\"), or too many uploads are being read (\"too_many_uploads\"). Nothing was read, so the file can be sent again",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/extract/jobs/{job_id}": {
+      "get": {
+        "summary": "Extract Job",
+        "description": "How far the upload got, and its answer once it is over. Any signed-in user\nmay ask, as everyone sees everyone's records. 404 after a server restart, or\nFINISHED_TTL_S after the job ended: some forms may be saved, so the page checks\nthe records screen.",
+        "operationId": "extract_job_api_v1_extract_jobs__job_id__get",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExtractJob"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown or forgotten (\"job_not_found\")",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }
@@ -337,8 +529,8 @@
               }
             }
           },
-          "403": {
-            "description": "A change that did not come from our own page (\"origin_not_allowed\")",
+          "401": {
+            "description": "No valid session (\"unauthenticated\")",
             "content": {
               "application/json": {
                 "schema": {
@@ -386,8 +578,8 @@
               }
             }
           },
-          "403": {
-            "description": "A change that did not come from our own page (\"origin_not_allowed\")",
+          "401": {
+            "description": "No valid session (\"unauthenticated\")",
             "content": {
               "application/json": {
                 "schema": {
@@ -604,8 +796,8 @@
               "application/json": {}
             }
           },
-          "403": {
-            "description": "A change that did not come from our own page (\"origin_not_allowed\")",
+          "401": {
+            "description": "No valid session (\"unauthenticated\")",
             "content": {
               "application/json": {
                 "schema": {
@@ -653,8 +845,8 @@
               }
             }
           },
-          "403": {
-            "description": "A change that did not come from our own page (\"origin_not_allowed\")",
+          "401": {
+            "description": "No valid session (\"unauthenticated\")",
             "content": {
               "application/json": {
                 "schema": {
@@ -721,8 +913,8 @@
               }
             }
           },
-          "403": {
-            "description": "A change that did not come from our own page (\"origin_not_allowed\")",
+          "401": {
+            "description": "No valid session (\"unauthenticated\")",
             "content": {
               "application/json": {
                 "schema": {
@@ -782,8 +974,8 @@
           "204": {
             "description": "Successful Response"
           },
-          "403": {
-            "description": "A change that did not come from our own page (\"origin_not_allowed\")",
+          "401": {
+            "description": "No valid session (\"unauthenticated\")",
             "content": {
               "application/json": {
                 "schema": {
@@ -804,6 +996,70 @@
           },
           "409": {
             "description": "Approved records stay (\"record_approved\")",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/records/{record_id}/history": {
+      "get": {
+        "summary": "Get History",
+        "description": "Who did what to the record and when, oldest first. Never the values (D13).",
+        "operationId": "get_history_api_v1_records__record_id__history_get",
+        "parameters": [
+          {
+            "name": "record_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Record Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/RecordEvent"
+                  },
+                  "title": "Response Get History Api V1 Records  Record Id  History Get"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session (\"unauthenticated\")",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such record",
             "content": {
               "application/json": {
                 "schema": {
@@ -862,8 +1118,8 @@
               }
             }
           },
-          "403": {
-            "description": "A change that did not come from our own page (\"origin_not_allowed\")",
+          "401": {
+            "description": "No valid session (\"unauthenticated\")",
             "content": {
               "application/json": {
                 "schema": {
@@ -905,6 +1161,35 @@
         }
       }
     },
+    "/api/v1/stats": {
+      "get": {
+        "summary": "Stats",
+        "description": "The overview screen: records left to approve, pending fields still flagged,\nand how often each field was corrected by hand (from the records' history).",
+        "operationId": "stats_api_v1_stats_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecordStats"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session (\"unauthenticated\")",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/senders": {
       "get": {
         "summary": "Senders",
@@ -925,8 +1210,8 @@
               }
             }
           },
-          "403": {
-            "description": "A change that did not come from our own page (\"origin_not_allowed\")",
+          "401": {
+            "description": "No valid session (\"unauthenticated\")",
             "content": {
               "application/json": {
                 "schema": {
@@ -961,8 +1246,8 @@
               "image/jpeg": {}
             }
           },
-          "403": {
-            "description": "A change that did not come from our own page (\"origin_not_allowed\")",
+          "401": {
+            "description": "No valid session (\"unauthenticated\")",
             "content": {
               "application/json": {
                 "schema": {
@@ -1071,6 +1356,32 @@
         "title": "BulkApproveResponse",
         "description": "Each record is checked on its own: one that is skipped doesn't stop the others."
       },
+      "DuplicateOf": {
+        "properties": {
+          "record_id": {
+            "type": "string",
+            "title": "Record Id"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "created_by": {
+            "type": "string",
+            "title": "Created By",
+            "description": "Who saved it, by display name."
+          }
+        },
+        "type": "object",
+        "required": [
+          "record_id",
+          "created_at",
+          "created_by"
+        ],
+        "title": "DuplicateOf",
+        "description": "An earlier record with the same commitment number and the same central numbers."
+      },
       "ErrorInfo": {
         "properties": {
           "code": {
@@ -1093,6 +1404,66 @@
           "message"
         ],
         "title": "ErrorInfo"
+      },
+      "ExtractJob": {
+        "properties": {
+          "job_id": {
+            "type": "string",
+            "title": "Job Id"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "running",
+              "done",
+              "failed"
+            ],
+            "title": "Status"
+          },
+          "done": {
+            "type": "integer",
+            "title": "Done",
+            "description": "Pages read so far, failed ones included."
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total",
+            "description": "Pages in the upload. 0 until the files are split into pages."
+          },
+          "result": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ExtractResponse"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "status \"done\": the saved records and the pages that failed."
+          },
+          "problem": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Problem"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "status \"failed\": why, with the status POST /extract would have answered: 413 too_many_pages; 503 quota_exhausted (nothing was saved, so the file can be sent again); 500 extraction_stopped (the job broke or the server stopped: some forms may be saved, check the records before sending again)."
+          }
+        },
+        "type": "object",
+        "required": [
+          "job_id",
+          "status",
+          "done",
+          "total",
+          "result",
+          "problem"
+        ],
+        "title": "ExtractJob",
+        "description": "An upload read in the background. Ask again until status is not \"running\"."
       },
       "ExtractResponse": {
         "properties": {
@@ -1203,6 +1574,25 @@
         ],
         "title": "FieldBox",
         "description": "Where the model read a value: a rectangle on one page of the form.\n\nEdges are in thousandths of the page image as saved (upright, the same image\n/api/v1/pages/{page_id}/image serves), 0 = top / left, 1000 = bottom / right.\nLeft is the image's own left: the page is never mirrored for RTL."
+      },
+      "FieldCorrections": {
+        "properties": {
+          "field": {
+            "type": "string",
+            "title": "Field",
+            "description": "A RecordFields name, or \"central_numbers\" for any central number."
+          },
+          "corrections": {
+            "type": "integer",
+            "title": "Corrections"
+          }
+        },
+        "type": "object",
+        "required": [
+          "field",
+          "corrections"
+        ],
+        "title": "FieldCorrections"
       },
       "FieldEdit": {
         "properties": {
@@ -1417,6 +1807,21 @@
           "message": {
             "type": "string",
             "title": "Message"
+          },
+          "duplicate_of": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/DuplicateOf"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duplicate Of",
+            "description": "DUPLICATE_RECORD only: every earlier record that is the same, oldest first."
           }
         },
         "type": "object",
@@ -1466,6 +1871,28 @@
         },
         "type": "object",
         "title": "ListItemEdit"
+      },
+      "LoginRequest": {
+        "properties": {
+          "username": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Username"
+          },
+          "password": {
+            "type": "string",
+            "maxLength": 1024,
+            "minLength": 1,
+            "title": "Password"
+          }
+        },
+        "type": "object",
+        "required": [
+          "username",
+          "password"
+        ],
+        "title": "LoginRequest"
       },
       "Problem": {
         "properties": {
@@ -1622,6 +2049,30 @@
               }
             ],
             "title": "Approved At"
+          },
+          "approved_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Approved By",
+            "description": "Display name of who approved it; null until approved."
+          },
+          "updated_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated By",
+            "description": "Display name of who last edited it; null if never edited."
           }
         },
         "type": "object",
@@ -1668,6 +2119,56 @@
         ],
         "title": "RecordCounts",
         "description": "The counters on the records screen.\n\nCounted over the other filters (q, sender, form_type, dates) but not status or\nneeds_review, so they stay put while the user switches between them."
+      },
+      "RecordEvent": {
+        "properties": {
+          "at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "At"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "created",
+              "corrected",
+              "confirmed",
+              "approved"
+            ],
+            "title": "Action"
+          },
+          "field": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Field",
+            "description": "The field, e.g. \"national_id\" or \"central_numbers[0]\"; null for created and approved."
+          },
+          "username": {
+            "type": "string",
+            "title": "Username"
+          },
+          "display_name": {
+            "type": "string",
+            "title": "Display Name",
+            "description": "\"לפני הכניסה\" for what was saved while the site had no sign-in (21.10-22.10)."
+          }
+        },
+        "type": "object",
+        "required": [
+          "at",
+          "action",
+          "field",
+          "username",
+          "display_name"
+        ],
+        "title": "RecordEvent",
+        "description": "One line of a record's history: who did what, to which field, and when.\nNever the values (D13)."
       },
       "RecordFields": {
         "properties": {
@@ -1861,6 +2362,64 @@
           "siblings"
         ],
         "title": "RecordPatchResponse"
+      },
+      "RecordStats": {
+        "properties": {
+          "pending": {
+            "type": "integer",
+            "title": "Pending"
+          },
+          "approved": {
+            "type": "integer",
+            "title": "Approved"
+          },
+          "needs_review": {
+            "type": "integer",
+            "title": "Needs Review",
+            "description": "Pending records with a field still flagged."
+          },
+          "fields_total": {
+            "type": "integer",
+            "title": "Fields Total",
+            "description": "Fields in pending records, each central number counted on its own."
+          },
+          "fields_flagged": {
+            "type": "integer",
+            "title": "Fields Flagged",
+            "description": "Of fields_total, the ones still flagged."
+          },
+          "corrections": {
+            "type": "integer",
+            "title": "Corrections",
+            "description": "Corrections by hand. Changing a field shared by a form's records counts once."
+          },
+          "corrected_records": {
+            "type": "integer",
+            "title": "Corrected Records",
+            "description": "Records with at least one correction."
+          },
+          "by_field": {
+            "items": {
+              "$ref": "#/components/schemas/FieldCorrections"
+            },
+            "type": "array",
+            "title": "By Field",
+            "description": "Most corrected first."
+          }
+        },
+        "type": "object",
+        "required": [
+          "pending",
+          "approved",
+          "needs_review",
+          "fields_total",
+          "fields_flagged",
+          "corrections",
+          "corrected_records",
+          "by_field"
+        ],
+        "title": "RecordStats",
+        "description": "The overview screen: how much work is left and which fields needed a hand.\n\nOver every record, with no filters."
       },
       "RecordSummary": {
         "properties": {
@@ -2062,6 +2621,30 @@
           "type"
         ],
         "title": "SkippedRecord"
+      },
+      "User": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "username": {
+            "type": "string",
+            "title": "Username"
+          },
+          "display_name": {
+            "type": "string",
+            "title": "Display Name"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "username",
+          "display_name"
+        ],
+        "title": "User",
+        "description": "The signed-in user, as require_user gives it to the endpoints."
       },
       "ValidationError": {
         "properties": {
