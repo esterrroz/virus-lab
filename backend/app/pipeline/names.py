@@ -21,6 +21,7 @@ Owner: A
 
 import logging
 from dataclasses import replace
+from typing import TypeGuard
 
 from app.extraction.provider import ExtractionProvider, NameReader, ProviderError, QuotaExhausted
 from app.pipeline.assemble import form_id
@@ -101,3 +102,10 @@ def merge(page_read: RawField, closer: NamePart) -> RawField:
             "evidence": closer.evidence or page_read.evidence,
         }
     )
+
+
+def _is_box(box: list[int] | None) -> TypeGuard[list[int]]:
+    if box is None or len(box) != 4:
+        return False
+    top, left, bottom, right = box
+    return 0 <= top < bottom <= 1000 and 0 <= left < right <= 1000

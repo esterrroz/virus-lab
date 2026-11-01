@@ -92,15 +92,13 @@ export interface paths {
         put?: never;
         /**
          * Extract
-         * @description Read every page of every file and save it as pending records.
+         * @description Receive the files and read them in the background: 202 with the job at once.
          *
-         *     A file or page that fails is reported in `files` / `failed_pages`, and the
-         *     others go on. When the daily quota runs out, the answer says whether sending
-         *     the file again is safe:
-         *     - nothing was saved: 503 quota_exhausted, and the file can be sent again;
-         *     - some pages were saved: 200 with quota_exhausted=true and those records.
-         *       Sending the file again would save them twice.
-         *     Otherwise 200, unless the request itself is unusable (4xx).
+         *     GET /extract/jobs/{job_id} tells how far it got, and in the end the saved
+         *     records, or why there are none. Each form is saved as soon as it is read, so
+         *     closing the page after this answer loses nothing.
+         *
+         *     A request that can't be used is refused here, before anything is read (4xx).
          */
         post: operations["extract_api_v1_extract_post"];
         delete?: never;
@@ -109,7 +107,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/extract/progress/{upload_id}": {
+    "/api/v1/extract/jobs/{job_id}": {
         parameters: {
             query?: never;
             header?: never;
@@ -117,11 +115,13 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Extract Progress
-         * @description How many pages of a running upload are read. 404 before it starts, after it
-         *     ends, and for an id the upload did not send.
+         * Extract Job
+         * @description How far the upload got, and its answer once it is over. Any signed-in user
+         *     may ask, as everyone sees everyone's records. 404 after a server restart, or
+         *     FINISHED_TTL_S after the job ended: some forms may be saved, so the page checks
+         *     the records screen.
          */
-        get: operations["extract_progress_api_v1_extract_progress__upload_id__get"];
+        get: operations["extract_job_api_v1_extract_jobs__job_id__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -267,6 +267,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/stats": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Stats
+         * @description The overview screen: records left to approve, pending fields still flagged,
+         *     and how often each field was corrected by hand (from the records' history).
+         */
+        get: operations["stats_api_v1_stats_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/senders": {
         parameters: {
             query?: never;
@@ -366,8 +387,18 @@ export interface components {
             /** Message */
             message: string;
         };
-        /** ExtractProgress */
-        ExtractProgress: {
+        /**
+         * ExtractJob
+         * @description An upload read in the background. Ask again until status is not "running".
+         */
+        ExtractJob: {
+            /** Job Id */
+            job_id: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "running" | "done" | "failed";
             /**
              * Done
              * @description Pages read so far, failed ones included.
@@ -378,6 +409,10 @@ export interface components {
              * @description Pages in the upload. 0 until the files are split into pages.
              */
             total: number;
+            /** @description status "done": the saved records and the pages that failed. */
+            result: components["schemas"]["ExtractResponse"] | null;
+            /** @description status "failed": why, with the status POST /extract would have answered: 413 too_many_pages; 503 quota_exhausted (nothing was saved, so the file can be sent again); 500 extraction_stopped (the job broke or the server stopped: some forms may be saved, check the records before sending again). */
+            problem: components["schemas"]["Problem"] | null;
         };
         /** ExtractResponse */
         ExtractResponse: {
@@ -432,6 +467,16 @@ export interface components {
             bottom: number;
             /** Right */
             right: number;
+        };
+        /** FieldCorrections */
+        FieldCorrections: {
+            /**
+             * Field
+             * @description A RecordFields name, or "central_numbers" for any central number.
+             */
+            field: string;
+            /** Corrections */
+            corrections: number;
         };
         /**
          * FieldEdit
@@ -720,6 +765,48 @@ export interface components {
             siblings: components["schemas"]["Record"][];
         };
         /**
+         * RecordStats
+         * @description The overview screen: how much work is left and which fields needed a hand.
+         *
+         *     Over every record, with no filters.
+         */
+        RecordStats: {
+            /** Pending */
+            pending: number;
+            /** Approved */
+            approved: number;
+            /**
+             * Needs Review
+             * @description Pending records with a field still flagged.
+             */
+            needs_review: number;
+            /**
+             * Fields Total
+             * @description Fields in pending records, each central number counted on its own.
+             */
+            fields_total: number;
+            /**
+             * Fields Flagged
+             * @description Of fields_total, the ones still flagged.
+             */
+            fields_flagged: number;
+            /**
+             * Corrections
+             * @description Corrections by hand. Changing a field shared by a form's records counts once.
+             */
+            corrections: number;
+            /**
+             * Corrected Records
+             * @description Records with at least one correction.
+             */
+            corrected_records: number;
+            /**
+             * By Field
+             * @description Most corrected first.
+             */
+            by_field: components["schemas"]["FieldCorrections"][];
+        };
+        /**
          * RecordSummary
          * @description A row on the records screen: effective values only, straight from the record table.
          */
@@ -837,6 +924,13 @@ export interface operations {
                         [key: string]: string | boolean | number;
                     };
                 };
+            };
+            /** @description The database is set but does not answer ("database": "unavailable") */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
@@ -959,10 +1053,7 @@ export interface operations {
     extract_api_v1_extract_post: {
         parameters: {
             query?: never;
-            header?: {
-                /** @description Optional, made by the page (8-64 letters, digits or -). While the upload runs, GET /api/v1/extract/progress/{upload_id} counts its pages. */
-                "X-Upload-Id"?: string | null;
-            };
+            header?: never;
             path?: never;
             cookie?: never;
         };
@@ -976,12 +1067,12 @@ export interface operations {
         };
         responses: {
             /** @description Successful Response */
-            200: {
+            202: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ExtractResponse"];
+                    "application/json": components["schemas"]["ExtractJob"];
                 };
             };
             /** @description No files ("no_files"), more than MAX_FILES_PER_REQUEST ("too_many_files"), or an upload that is cut off or broken ("invalid_upload") */
@@ -1011,7 +1102,7 @@ export interface operations {
                     "application/json": components["schemas"]["Problem"];
                 };
             };
-            /** @description Request over MAX_REQUEST_MB ("request_too_large") or over MAX_PAGES_PER_REQUEST ("too_many_pages") */
+            /** @description Request over MAX_REQUEST_MB ("request_too_large"). Too many pages is found only once the files are split: the job ends with "too_many_pages" */
             413: {
                 headers: {
                     [name: string]: unknown;
@@ -1029,16 +1120,7 @@ export interface operations {
                     "application/json": components["schemas"]["Problem"];
                 };
             };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-            /** @description The daily Gemini quota ran out before any page was saved ("quota_exhausted"): nothing was saved, so the file can be sent again. Also when the database is not reachable ("database_unavailable") */
+            /** @description The database is not reachable ("database_unavailable"), or too many uploads are being read ("too_many_uploads"). Nothing was read, so the file can be sent again */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -1049,12 +1131,12 @@ export interface operations {
             };
         };
     };
-    extract_progress_api_v1_extract_progress__upload_id__get: {
+    extract_job_api_v1_extract_jobs__job_id__get: {
         parameters: {
             query?: never;
             header?: never;
             path: {
-                upload_id: string;
+                job_id: string;
             };
             cookie?: never;
         };
@@ -1066,10 +1148,10 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ExtractProgress"];
+                    "application/json": components["schemas"]["ExtractJob"];
                 };
             };
-            /** @description Not running ("upload_not_found") */
+            /** @description Unknown or forgotten ("job_not_found") */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -1513,6 +1595,35 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    stats_api_v1_stats_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecordStats"];
+                };
+            };
+            /** @description No valid session ("unauthenticated") */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
         };

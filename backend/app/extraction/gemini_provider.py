@@ -8,13 +8,19 @@ retries are few and deliberate:
   the quota resets; once every key is used up, QuotaExhausted (the batch stops);
 - the key itself is refused (invalid, revoked, API off) -> the next key too, and
   the refused key is skipped for an hour;
-- too many requests this minute (429) -> one retry after the delay Gemini asks for,
-  if it is short, else the next key;
+- too many requests this minute (429) -> the next key at once, since each key's
+  project has its own per-minute limit; with one key, one retry after the delay
+  Gemini asks for, if it is short;
 - 500 / 502 / 503 / 504, or no connection at all -> one retry after a pause;
-- anything else (a bad request, a timeout, an answer that doesn't fit the schema,
-  any other error from the client) -> ProviderError, no retry.
+- anything else (a bad request, an answer that doesn't fit the schema, any other
+  error from the client) -> ProviderError, no retry.
+A call has no time limit: a slow page is waited for, never stopped (22.10).
 The client's own retries are off (google-genai's default), so a call is never
 repeated behind our back.
+
+Each call starts from the next key in turn (round robin), so a long file spreads
+its calls over every key's per-minute limit instead of running one key into it.
+The daily quota is spent evenly; a key that is out is skipped as before.
 
 One semaphore for the whole server: two uploads at once still make at most
 `max_concurrency` calls, which keeps the per-minute limit in reach.
@@ -60,7 +66,6 @@ REFUSED_KEY_REST = timedelta(hours=1)
 QUOTA_MESSAGE = "המכסה היומית של Gemini נגמרה. אפשר לנסות שוב מחר"
 RATE_MESSAGE = "יותר מדי בקשות ל־Gemini בדקה האחרונה. אפשר לנסות שוב בעוד דקה"
 UNAVAILABLE_MESSAGE = "שירות Gemini לא זמין כרגע. אפשר לנסות שוב"
-TIMEOUT_MESSAGE = "Gemini לא ענה בזמן. אפשר לנסות שוב"
 BAD_ANSWER_MESSAGE = "התשובה של Gemini לא הייתה תקינה. אפשר לנסות שוב"
 FAILED_MESSAGE = "הפנייה ל־Gemini נכשלה"
 # Every key refused: nothing the user can do but tell whoever runs the server.
@@ -80,7 +85,6 @@ class GeminiProvider:
         model: str,
         *,
         max_concurrency: int,
-        timeout_s: float,
         prompt: str | None = None,
         name_prompt: str | None = None,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
@@ -89,14 +93,13 @@ class GeminiProvider:
         if not clients:
             raise ValueError("GeminiProvider needs at least one client")
         self._clients = list(clients)  # one per key, in the order of GEMINI_API_KEYS
-        self._current = 0  # the key in use, shared by every upload on the server
+        self._next = 0  # the key the next call starts from, shared by every upload
         # Keys skipped until a time, with what they failed with: out of daily quota
         # until it resets, refused for a while. Once every key is out, a page then
         # fails at once instead of spending one request per key.
         self._resting: dict[int, tuple[datetime, _KeyFailure]] = {}
         self._now = now  # tests pass a fake clock
         self._model = model
-        self._timeout_s = timeout_s
         self._prompt = prompt if prompt is not None else load_prompt()
         self._name_prompt = (
             name_prompt if name_prompt is not None else load_prompt(NAME_PROMPT_FILE)
@@ -134,7 +137,7 @@ class GeminiProvider:
         # Not sort_keys: Gemini writes the answer in the order of the properties, so a
         # new order is a new answer, and the cache must not hand back the old one.
         schema_json = json.dumps(schema.model_json_schema())
-        thinking = config.thinking_config.thinking_level
+        thinking = config.thinking_config.thinking_level if config.thinking_config else None
         resolution = config.media_resolution
         return "\n".join((self._model, str(thinking), str(resolution), prompt, schema_json))
 
@@ -150,11 +153,13 @@ class GeminiProvider:
         self, contents: list, config: types.GenerateContentConfig, schema: type[T]
     ) -> T:
         async with self._semaphore:
-            # Every key once, starting from the one in use. The order is fixed here,
-            # not read again from _current, which other pages move meanwhile. Wrapping
-            # around means a key that ran out yesterday is found again once it's back.
+            # Every key once, starting from the next one in turn. The order is fixed
+            # here, not read again from _next, which other calls move meanwhile.
+            # Wrapping around means a key that ran out yesterday is found again once
+            # it's back.
             count = len(self._clients)
-            start = self._current
+            start = self._next
+            self._next = (start + 1) % count
             failures: list[_KeyFailure] = []
             for key in [(start + step) % count for step in range(count)]:
                 resting = self._resting.get(key)
@@ -162,17 +167,15 @@ class GeminiProvider:
                     failures.append(resting[1])  # known to fail: don't spend a request on it
                     continue
                 try:
-                    result = await self._ask_with(self._clients[key], contents, config, schema)
+                    result = await self._ask_with(
+                        self._clients[key], contents, config, schema, wait_for_minute=count == 1
+                    )
                 except _KEY_FAILURES as exc:  # this key only: try the next
                     logger.warning("gemini key %d of %d %s", key + 1, count, _why(exc))
                     failures.append(exc)
                     if (until := _rest_until(exc, self._now())) is not None:
                         self._resting[key] = (until, exc)
-                    # So pages starting now skip it; unless another page moved on already.
-                    if self._current == key:
-                        self._current = (key + 1) % count
                     continue
-                self._current = key  # a key that answers: later pages start here
                 return result
         if count > 1:
             logger.warning("gemini: none of the %d keys could be used", count)
@@ -184,12 +187,16 @@ class GeminiProvider:
         contents: list,
         config: types.GenerateContentConfig,
         schema: type[T],
+        *,
+        wait_for_minute: bool,
     ) -> T:
+        """`wait_for_minute`: on a per-minute limit, wait for it (one key) rather than
+        hand the call to the next key at once (several keys)."""
         for attempt in range(1, MAX_ATTEMPTS + 1):
             try:
                 return await self._call(client, contents, config, schema)
             except errors.APIError as exc:
-                wait = self._retry_wait(exc, attempt)
+                wait = self._retry_wait(exc, attempt, wait_for_minute=wait_for_minute)
                 if wait is None:
                     raise _provider_error(exc) from None
                 reason = f"{exc.code} {exc.status}"
@@ -214,14 +221,9 @@ class GeminiProvider:
         config: types.GenerateContentConfig,
         schema: type[T],
     ) -> T:
-        try:
-            async with asyncio.timeout(self._timeout_s):
-                response = await client.aio.models.generate_content(
-                    model=self._model, contents=contents, config=config
-                )
-        except TimeoutError:
-            logger.warning("gemini timed out after %ss", self._timeout_s)
-            raise ProviderError(TIMEOUT_MESSAGE) from None
+        response = await client.aio.models.generate_content(
+            model=self._model, contents=contents, config=config
+        )
         if not response.text:  # blocked, or no candidate
             logger.warning("gemini returned no text")
             raise ProviderError(BAD_ANSWER_MESSAGE)
@@ -232,13 +234,17 @@ class GeminiProvider:
             logger.warning("gemini answer did not fit the schema")
             raise ProviderError(BAD_ANSWER_MESSAGE) from None
 
-    def _retry_wait(self, exc: errors.APIError, attempt: int) -> float | None:
+    def _retry_wait(
+        self, exc: errors.APIError, attempt: int, *, wait_for_minute: bool
+    ) -> float | None:
         """Seconds to wait before the next attempt, or None to stop here."""
         if exc.code == 429 and _is_daily_quota(exc):
             return None
         if exc.code not in _RETRYABLE or attempt == MAX_ATTEMPTS:
             return None
         if exc.code == 429:
+            if not wait_for_minute:
+                return None  # another key's project is not over its minute
             wait = _retry_delay(exc)
             return wait if wait is not None and wait <= MAX_RATE_WAIT_S else None
         return SERVER_ERROR_WAIT_S

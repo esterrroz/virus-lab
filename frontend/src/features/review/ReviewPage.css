@@ -138,9 +138,74 @@
   margin-inline: auto;
 }
 
+/* Both modes look like the landing page: soft blue, turquoise and green light
+   behind the content. In upload mode the steps are also a centered pill. */
+.layout:has(.review-page) {
+  background:
+    radial-gradient(60rem 40rem at 105% -10%, rgb(14 165 198 / 0.16), transparent 60%),
+    radial-gradient(50rem 36rem at -10% 105%, rgb(156 195 59 / 0.18), transparent 60%),
+    var(--color-page, #f2f6fa);
+}
+
+/* Upload mode fits one screen: the bar on top, the panel takes the rest. If a
+   window is too short even so, the frame scrolls inside, background and all. */
+.layout:has(.review-page.is-upload) {
+  display: flex;
+  flex-direction: column;
+  block-size: 100svh;
+  overflow-y: auto;
+}
+
+.layout:has(.review-page.is-upload) .layout-main {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-block-size: 0;
+}
+
+.review-page.is-upload {
+  flex: 1;
+  min-block-size: 0;
+  box-sizing: border-box;
+  gap: clamp(8px, 2vh, 20px);
+  padding-block: clamp(10px, 2.5vh, 24px);
+}
+
+.review-page.is-upload .review-page-head {
+  flex: none;
+}
+
+.review-page.is-upload .review-page-upload {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-block-size: 0;
+}
+
+.review-page.is-upload .review-page-head {
+  justify-content: center;
+}
+
+.review-page.is-upload .review-steps {
+  padding-block: 6px;
+  padding-inline: 8px 14px;
+  background: rgb(255 255 255 / 0.75);
+  border: 1px solid var(--color-border, #e1e8ef);
+  border-radius: 999px;
+}
+
+.review-page.is-upload .review-steps li + li::before {
+  inline-size: 36px;
+  background: linear-gradient(90deg, var(--color-border-strong, #a9bccf), var(--color-brand-teal, #0ea5c6));
+}
+
+.review-page.is-upload .review-page-switch {
+  margin-inline-start: 0;
+}
+
 .review-page-work {
   display: grid;
-  grid-template-columns: minmax(0, 2fr) minmax(360px, 3fr);
+  grid-template-columns: minmax(280px, 1fr) minmax(360px, 2.2fr);
   align-items: start;
   gap: 16px;
 }
@@ -219,5 +284,43 @@
 @media (prefers-reduced-motion: reduce) {
   .review-page-pulse {
     animation: none;
+  }
+}
+
+/* How many are approved: a line and a bar, beside the steps. */
+.review-progress {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  flex: 0 1 280px;
+  min-inline-size: 160px;
+}
+
+.review-progress-text {
+  color: var(--color-text-muted, #56677a);
+  font-size: 0.875rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.review-progress-bar {
+  flex: 1;
+  block-size: 8px;
+  overflow: hidden;
+  background: var(--color-border, #e1e8ef);
+  border-radius: 999px;
+}
+
+.review-progress-bar > span {
+  display: block;
+  block-size: 100%;
+  background: var(--color-success, #1e6b3a);
+  border-radius: inherit;
+  transition: inline-size 0.3s ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .review-progress-bar > span {
+    transition: none;
   }
 }
