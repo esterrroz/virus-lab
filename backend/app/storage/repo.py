@@ -7,6 +7,7 @@ Owner: B
 """
 
 import hashlib
+from collections.abc import Mapping
 from datetime import date, datetime
 
 from psycopg import AsyncConnection
@@ -26,13 +27,26 @@ async def lock_commitments(conn: AsyncConnection, numbers: list[str]) -> None:
         )
 
 
-async def existing_commitments(conn: AsyncConnection, numbers: list[str]) -> set[str]:
+async def same_records(
+    conn: AsyncConnection,
+    commitment_number: str,
+    central_values: list[str],
+    *,
+    except_id: str | None = None,
+) -> list[dict]:
+    """Other records with this commitment number and the same central numbers in any
+    order (A4), with who saved each and when, oldest first. Two empty lists are the same."""
     async with conn.cursor(row_factory=dict_row) as cur:
         await cur.execute(
-            "SELECT DISTINCT commitment_number FROM record WHERE commitment_number = ANY(%s)",
-            (list(numbers),),
+            "SELECT r.id AS record_id, r.created_at, u.display_name AS created_by"
+            "  FROM record r JOIN users u ON u.id = r.created_by"
+            " WHERE r.commitment_number = %s"
+            "   AND r.central_values @> %s::text[] AND r.central_values <@ %s::text[]"
+            "   AND r.id IS DISTINCT FROM %s"
+            " ORDER BY r.created_at, r.id",
+            (commitment_number, central_values, central_values, except_id),
         )
-        return {row["commitment_number"] for row in await cur.fetchall()}
+        return await cur.fetchall()
 
 
 async def insert_page(
@@ -45,11 +59,12 @@ async def insert_page(
     rotation: int,
     first_page_id: str | None,
     now: datetime,
+    user_id: str,
 ) -> None:
     await conn.execute(
         "INSERT INTO page (id, file_id, source_filename, page_number, rotation,"
-        " first_page_id, created_at) VALUES (%s, %s, %s, %s, %s, %s, %s)",
-        (page_id, file_id, source_filename, page_number, rotation, first_page_id, now),
+        " first_page_id, created_at, created_by) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+        (page_id, file_id, source_filename, page_number, rotation, first_page_id, now, user_id),
     )
 
 
@@ -88,12 +103,14 @@ async def insert_record(
     received_date: date | None,
     search_text: str,
     now: datetime,
+    user_id: str,
 ) -> None:
     await conn.execute(
         "INSERT INTO record (id, page_id, commitment_idx, needs_review, form_type,"
         " fields, central_numbers, issues, national_id, commitment_number, central_values,"
-        " first_name, last_name, sender, received_date, search_text, created_at, updated_at)"
-        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+        " first_name, last_name, sender, received_date, search_text,"
+        " created_at, created_by, updated_at)"
+        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
         (
             record_id,
             page_id,
@@ -112,6 +129,7 @@ async def insert_record(
             received_date,
             search_text,
             now,
+            user_id,
             now,
         ),
     )
@@ -122,27 +140,47 @@ async def insert_event(
     *,
     record_id: str,
     action: str,
+    user_id: str,
     now: datetime,
     field: str | None = None,
 ) -> None:
-    """What was done, to which field, and when. Never the values (D13)."""
+    """Who did what, to which field, and when. Never the values (D13)."""
     await conn.execute(
-        "INSERT INTO record_event (record_id, at, action, field) VALUES (%s, %s, %s, %s)",
-        (record_id, now, action, field),
+        "INSERT INTO record_event (record_id, at, user_id, action, field)"
+        " VALUES (%s, %s, %s, %s, %s)",
+        (record_id, now, user_id, action, field),
     )
+
+
+async def list_events(conn: AsyncConnection, record_id: str) -> list[dict]:
+    """A record's events with who did each, oldest first."""
+    async with conn.cursor(row_factory=dict_row) as cur:
+        await cur.execute(
+            "SELECT e.at, e.action, e.field, u.username, u.display_name"
+            "  FROM record_event e JOIN users u ON u.id = e.user_id"
+            " WHERE e.record_id = %s ORDER BY e.at, e.id",
+            (record_id,),
+        )
+        return await cur.fetchall()
 
 
 # --- Reading records
 
-# A record with what the contract shows next to it: its form's pages.
+# A record with what the contract shows next to it: its form's pages and who
+# approved or last edited it (by display name, from users and record_event).
 _RECORD_SELECT = """
 SELECT r.*,
        p.source_filename,
        p.page_number,
        COALESCE(cont.numbers, '{}') AS continuation_pages,
-       COALESCE(cont.ids, '{}') AS continuation_page_ids
+       COALESCE(cont.ids, '{}') AS continuation_page_ids,
+       approver.display_name AS approved_by_name,
+       (SELECT u.display_name FROM record_event e JOIN users u ON u.id = e.user_id
+         WHERE e.record_id = r.id AND e.action IN ('corrected', 'confirmed')
+         ORDER BY e.at DESC, e.id DESC LIMIT 1) AS updated_by_name
   FROM record r
   JOIN page p ON p.id = r.page_id
+  LEFT JOIN users approver ON approver.id = r.approved_by
   LEFT JOIN LATERAL (
        SELECT array_agg(c.page_number ORDER BY c.page_number) AS numbers,
               array_agg(c.id ORDER BY c.page_number) AS ids
@@ -170,6 +208,13 @@ async def get_siblings(conn: AsyncConnection, record: dict, *, lock: bool = Fals
         return await cur.fetchall()
 
 
+async def _count(cur) -> int:
+    """The `n` of a count(*), which always returns one row."""
+    row = await cur.fetchone()
+    assert row is not None
+    return row["n"]
+
+
 def _like(text: str) -> str:
     """A LIKE pattern that matches `text` anywhere, with % and _ taken literally."""
     escaped = text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
@@ -188,14 +233,14 @@ _FILTER_SQL = {
 }
 
 
-def _where(conditions: dict[str, object]) -> tuple[str, list[object]]:
+def _where(conditions: Mapping[str, object]) -> tuple[str, list[object]]:
     """AND of the filters that are set."""
     parts, params = [], []
     for key, value in conditions.items():
         if value is None:
             continue
         parts.append(_FILTER_SQL[key])
-        params.append(_like(value) if key == "search" else value)
+        params.append(_like(str(value)) if key == "search" else value)
     return (" WHERE " + " AND ".join(parts)) if parts else "", params
 
 
@@ -262,7 +307,7 @@ async def list_records(
         )
         rows = await cur.fetchall()
         await cur.execute(f"SELECT count(*) AS n FROM record r{where}", params)
-        total = (await cur.fetchone())["n"]
+        total = await _count(cur)
         await cur.execute(
             "SELECT count(*) FILTER (WHERE r.status = 'pending') AS pending,"
             " count(*) FILTER (WHERE r.status = 'approved') AS approved,"
@@ -271,6 +316,7 @@ async def list_records(
             count_params,
         )
         counts = await cur.fetchone()
+    assert counts is not None  # count(*) always returns a row
     return rows, total, counts
 
 
@@ -308,24 +354,13 @@ async def export_records(
 
 
 async def insert_export_log(
-    conn: AsyncConnection, *, export_format: str, record_count: int, now: datetime
+    conn: AsyncConnection, *, user_id: str, export_format: str, record_count: int, now: datetime
 ) -> None:
-    """When and how many were exported. Not the filters and not the records (D13)."""
+    """Who exported, when and how many. Not the filters and not the records (D13)."""
     await conn.execute(
-        "INSERT INTO export_log (at, format, record_count) VALUES (%s, %s, %s)",
-        (now, export_format, record_count),
+        "INSERT INTO export_log (at, user_id, format, record_count) VALUES (%s, %s, %s, %s)",
+        (now, user_id, export_format, record_count),
     )
-
-
-async def commitment_taken(conn: AsyncConnection, number: str, *, except_id: str) -> bool:
-    """Whether another record already has this commitment number (A4)."""
-    async with conn.cursor(row_factory=dict_row) as cur:
-        await cur.execute(
-            "SELECT EXISTS (SELECT 1 FROM record WHERE commitment_number = %s AND id <> %s)"
-            " AS taken",
-            (number, except_id),
-        )
-        return (await cur.fetchone())["taken"]
 
 
 # --- Changing records. The caller holds the row lock and has checked version and status.
@@ -372,11 +407,13 @@ async def update_record(
     )
 
 
-async def approve_record(conn: AsyncConnection, record_id: str, *, now: datetime) -> None:
+async def approve_record(
+    conn: AsyncConnection, record_id: str, *, user_id: str, now: datetime
+) -> None:
     await conn.execute(
-        "UPDATE record SET status = 'approved', approved_at = %s,"
+        "UPDATE record SET status = 'approved', approved_at = %s, approved_by = %s,"
         " version = version + 1, updated_at = %s WHERE id = %s",
-        (now, now, record_id),
+        (now, user_id, now, record_id),
     )
 
 
@@ -388,3 +425,61 @@ async def delete_record(conn: AsyncConnection, record_id: str, page_id: str) -> 
         "DELETE FROM page WHERE id = %s AND NOT EXISTS (SELECT 1 FROM record WHERE page_id = %s)",
         (page_id, page_id),
     )
+
+
+# --- The overview screen
+
+# Every field of a pending record: the RecordFields in `fields`, and each central number.
+_PENDING_FIELDS = """
+SELECT count(*) AS fields_total,
+       count(*) FILTER (WHERE (f.field ->> 'needs_review')::boolean) AS fields_flagged
+  FROM record r
+ CROSS JOIN LATERAL (
+       SELECT value FROM jsonb_each(r.fields)
+        UNION ALL
+       SELECT value FROM jsonb_array_elements(r.central_numbers)
+       ) AS f(field)
+ WHERE r.status = 'pending'
+"""
+
+# A shared field corrected once is logged on each record of the form, all with the
+# same time and field name, so DISTINCT (form, at, field) counts it once.
+# "central_numbers[2]" counts as "central_numbers".
+_CORRECTIONS = r"""
+SELECT regexp_replace(c.field, '\[\d+\]$', '') AS field, count(*) AS corrections
+  FROM (SELECT DISTINCT r.page_id, e.at, e.field
+          FROM record_event e JOIN record r ON r.id = e.record_id
+         WHERE e.action = 'corrected' AND e.field IS NOT NULL) AS c
+ GROUP BY 1
+ ORDER BY corrections DESC, field
+"""
+
+
+async def _one(cur) -> dict:
+    """The row of an aggregate with no GROUP BY, which always returns one row."""
+    row = await cur.fetchone()
+    assert row is not None
+    return row
+
+
+async def record_stats(conn: AsyncConnection) -> dict:
+    """The record counts, the pending fields still flagged, and corrections per field."""
+    async with conn.cursor(row_factory=dict_row) as cur:
+        await cur.execute(
+            "SELECT count(*) FILTER (WHERE status = 'pending') AS pending,"
+            " count(*) FILTER (WHERE status = 'approved') AS approved,"
+            " count(*) FILTER (WHERE status = 'pending' AND needs_review) AS needs_review"
+            " FROM record"
+        )
+        stats = await _one(cur)
+        await cur.execute(_PENDING_FIELDS)
+        stats |= await _one(cur)
+        await cur.execute(
+            "SELECT count(DISTINCT record_id) AS corrected_records FROM record_event"
+            " WHERE action = 'corrected'"
+        )
+        stats |= await _one(cur)
+        await cur.execute(_CORRECTIONS)
+        stats["by_field"] = await cur.fetchall()
+    stats["corrections"] = sum(row["corrections"] for row in stats["by_field"])
+    return stats
