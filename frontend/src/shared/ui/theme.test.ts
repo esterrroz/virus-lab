@@ -18,7 +18,7 @@ describe("page theme", () => {
 
   test("the page paints its own background and text", () => {
     const body = /body\s*\{([^}]*)\}/.exec(css)?.[1] ?? "";
-    expect(body).toContain("background: var(--color-surface");
+    expect(body).toContain("background: var(--color-page");
     expect(body).toContain("color: var(--color-text");
   });
 });
