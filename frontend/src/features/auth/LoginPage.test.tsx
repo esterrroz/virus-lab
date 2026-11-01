@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
-// The login screen: errors in Hebrew, and back to the screen that asked (PLAN-DEV-B 3.5).
+// The login screen: errors in Hebrew, and on to the upload, or to the record a
+// link pointed to (PLAN-DEV-B 3.5).
 // Owner: B
 
 import { cleanup, render, screen } from "@testing-library/react";
@@ -8,19 +9,22 @@ import { MemoryRouter, Route, Routes } from "react-router";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { ApiError } from "../../api/client";
 import { AuthContext, type Auth, type AuthState } from "./authContext";
+import { greeting } from "./greeting";
 import { LoginPage } from "./LoginPage";
 import { loginError } from "./loginError";
 
 afterEach(cleanup);
 
-function renderLogin(login: Auth["login"], state: AuthState = { status: "signed_out" }) {
+function renderLogin(login: Auth["login"], state: AuthState = { status: "signed_out" }, from = "/records") {
   const auth: Auth = { state, login, logout: vi.fn(), retry: vi.fn() };
   render(
     <AuthContext.Provider value={auth}>
-      <MemoryRouter initialEntries={[{ pathname: "/login", state: { from: "/records?status=pending" } }]}>
+      <MemoryRouter initialEntries={[{ pathname: "/login", state: { from } }]}>
         <Routes>
           <Route path="/login" element={<LoginPage />} />
+          <Route path="/upload" element={<p>מסך ההעלאה</p>} />
           <Route path="/records" element={<p>מסך הרשומות</p>} />
+          <Route path="/records/:recordId" element={<p>מסך הרשומה</p>} />
         </Routes>
       </MemoryRouter>
     </AuthContext.Provider>,
@@ -35,20 +39,37 @@ async function signIn(password = "correct horse battery") {
 }
 
 describe("LoginPage", () => {
+  test("opens the site with the ministry's logo and a greeting", () => {
+    renderLogin(vi.fn());
+
+    expect(screen.getByRole("img", { name: "משרד הבריאות" })).toBeTruthy();
+    expect(screen.getByRole("heading", { level: 2, name: "כניסה למערכת" })).toBeTruthy();
+    expect(screen.getByText(/טוב לראות אותך/)).toBeTruthy();
+  });
+
   test("the username field has the focus", () => {
     renderLogin(vi.fn());
 
     expect(document.activeElement).toBe(screen.getByLabelText("שם משתמש"));
   });
 
-  test("signs in and goes back to the screen that asked", async () => {
+  test("signs in and goes to the upload, even when the records screen asked", async () => {
     const login = vi.fn<Auth["login"]>().mockResolvedValue();
     renderLogin(login);
 
     await signIn();
 
     expect(login).toHaveBeenCalledWith("dana", "correct horse battery");
-    expect(await screen.findByText("מסך הרשומות")).toBeTruthy();
+    expect(await screen.findByText("מסך ההעלאה")).toBeTruthy();
+    expect(screen.queryByText("מסך הרשומות")).toBeNull();
+  });
+
+  test("a link to one record opens that record after signing in", async () => {
+    renderLogin(vi.fn<Auth["login"]>().mockResolvedValue(), { status: "signed_out" }, "/records/r1");
+
+    await signIn();
+
+    expect(await screen.findByText("מסך הרשומה")).toBeTruthy();
   });
 
   test("a wrong password shows one message and clears the password", async () => {
@@ -63,6 +84,23 @@ describe("LoginPage", () => {
     expect((screen.getByLabelText("סיסמה") as HTMLInputElement).value).toBe("");
   });
 
+  test("the eye shows the password, and hides it again", async () => {
+    renderLogin(vi.fn<Auth["login"]>());
+    const user = userEvent.setup();
+    const password = screen.getByLabelText("סיסמה") as HTMLInputElement;
+    await user.type(password, "secret");
+    expect(password.type).toBe("password");
+
+    await user.click(screen.getByRole("button", { name: "הצגת הסיסמה" }));
+    expect(password.type).toBe("text");
+    expect(password.value).toBe("secret");
+
+    const hide = screen.getByRole("button", { name: "הסתרת הסיסמה" });
+    expect(hide.getAttribute("aria-pressed")).toBe("true");
+    await user.click(hide);
+    expect(password.type).toBe("password");
+  });
+
   test("a locked account says when to try again", async () => {
     const login = vi
       .fn<Auth["login"]>()
@@ -74,10 +112,32 @@ describe("LoginPage", () => {
     expect((await screen.findByRole("alert")).textContent).toContain("נסי שוב בעוד 15 דקות");
   });
 
-  test("an already signed-in user goes straight on", () => {
+  test("an already signed-in user goes straight on to the upload", () => {
     renderLogin(vi.fn(), { status: "signed_in", user: { id: "u1", username: "dana", display_name: "דנה" } });
 
-    expect(screen.getByText("מסך הרשומות")).toBeTruthy();
+    expect(screen.getByText("מסך ההעלאה")).toBeTruthy();
+  });
+
+  test("an already signed-in user with a record link goes to that record", () => {
+    renderLogin(vi.fn(), { status: "signed_in", user: { id: "u1", username: "dana", display_name: "דנה" } }, "/records/r1");
+
+    expect(screen.getByText("מסך הרשומה")).toBeTruthy();
+  });
+});
+
+describe("greeting", () => {
+  test.each([
+    [5, "בוקר טוב"],
+    [11, "בוקר טוב"],
+    [12, "צהריים טובים"],
+    [16, "צהריים טובים"],
+    [17, "ערב טוב"],
+    [21, "ערב טוב"],
+    [22, "לילה טוב"],
+    [0, "לילה טוב"],
+    [4, "לילה טוב"],
+  ])("at %i o'clock: %s", (hour, expected) => {
+    expect(greeting(hour)).toBe(expected);
   });
 });
 

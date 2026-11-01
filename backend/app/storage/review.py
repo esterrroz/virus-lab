@@ -14,7 +14,6 @@ from datetime import date, datetime
 from psycopg import AsyncConnection
 
 from app.rules.engine import apply_rules
-from app.rules.issues import make_issue
 from app.rules.records import blocking_fields
 from app.rules.review_policy import is_blocking
 from app.rules.text import fold_text
@@ -30,16 +29,18 @@ from app.schemas.api import (
     ListItemEdit,
     Record,
     RecordCounts,
+    RecordEvent,
     RecordFields,
     RecordList,
     RecordPatch,
     RecordPatchResponse,
+    RecordStats,
     RecordSummary,
     SkippedRecord,
     User,
 )
 from app.storage import repo
-from app.storage.service import _iso_date, search_text
+from app.storage.service import _iso_date, central_values, flag_duplicate, search_text
 
 # The fields every record of a form shares (A3). commitment_number is the record's own.
 SHARED = tuple(FormFields.model_fields)
@@ -84,8 +85,8 @@ def to_record(row: dict) -> Record:
         created_at=row["created_at"],
         updated_at=row["updated_at"],
         approved_at=row["approved_at"],
-        approved_by=row["approved_by_username"],
-        updated_by=row["updated_by_username"],
+        approved_by=row["approved_by_name"],
+        updated_by=row["updated_by_name"],
     )
 
 
@@ -115,12 +116,29 @@ def _to_summary(row: dict) -> RecordSummary:
 # --- Reading
 
 
+async def _reload(conn: AsyncConnection, record_id: str) -> Record:
+    """A record just saved in this transaction, as it is now."""
+    row = await repo.get_record(conn, record_id)
+    if row is None:  # held by the transaction's lock, so only if a bug deleted it
+        raise _not_found()
+    return to_record(row)
+
+
 async def get_record(conn: AsyncConnection, record_id: str) -> Record:
     async with conn.transaction():
         row = await repo.get_record(conn, record_id)
     if row is None:
         raise _not_found()
     return to_record(row)
+
+
+async def get_history(conn: AsyncConnection, record_id: str) -> list[RecordEvent]:
+    """Who created, corrected, confirmed and approved the record, oldest first."""
+    async with conn.transaction():
+        if await repo.get_record(conn, record_id) is None:
+            raise _not_found()
+        rows = await repo.list_events(conn, record_id)
+    return [RecordEvent(**row) for row in rows]
 
 
 async def list_records(
@@ -133,10 +151,14 @@ async def list_records(
     form_type: str | None = None,
     date_from: date | None = None,
     date_to: date | None = None,
+    sort: str = "-created_at",
     limit: int = 50,
     offset: int = 0,
 ) -> RecordList:
-    """Newest first. `q` is folded like search_text, so ״ and " or niqqud don't matter."""
+    """In the `sort` order, newest first by default.
+
+    `q` is folded like search_text, so ״ and " or niqqud don't matter.
+    """
     search = fold_text(q) if q else ""
     async with conn.transaction():
         rows, total, counts = await repo.list_records(
@@ -148,6 +170,7 @@ async def list_records(
             form_type=form_type,
             date_from=date_from,
             date_to=date_to,
+            sort=sort,
             limit=limit,
             offset=offset,
         )
@@ -158,6 +181,12 @@ async def list_records(
         offset=offset,
         counts=RecordCounts(**counts),
     )
+
+
+async def get_stats(conn: AsyncConnection) -> RecordStats:
+    """The overview screen's numbers, over every record."""
+    async with conn.transaction():
+        return RecordStats(**await repo.record_stats(conn))
 
 
 # A file, not a page: enough for every record of the demo, small enough to build in memory.
@@ -177,6 +206,7 @@ async def export_records(
     form_type: str | None = None,
     date_from: date | None = None,
     date_to: date | None = None,
+    sort: str = "-created_at",
 ) -> list[Record]:
     """Every record the list shows with these filters, and an export_log row (D19).
 
@@ -194,6 +224,7 @@ async def export_records(
             form_type=form_type,
             date_from=date_from,
             date_to=date_to,
+            sort=sort,
             limit=MAX_EXPORT + 1,
         )
         if len(rows) > MAX_EXPORT:
@@ -250,25 +281,23 @@ def rerun_rules(record: Record, *, today: date) -> Record:
 
 async def _keep_duplicate_flag(conn: AsyncConnection, before: Record, after: Record) -> Record:
     """apply_rules doesn't know other records, so DUPLICATE_RECORD (set on save, A4) is
-    kept here: carried while the number stays, checked again when it changes.
-    Confirming the field still resolves it."""
+    kept here. It is checked again when the commitment number or the central numbers
+    change, and while the record is flagged, since the earlier records may be gone or
+    changed by now. An unflagged record that didn't change is not checked: the record
+    saved first is never flagged by a later copy. Confirming the field still resolves it."""
     old, new = before.fields.commitment_number, after.fields.commitment_number
     if not new.value:
         return after
-    if new.value == old.value:
-        duplicate = any(issue.code == "DUPLICATE_RECORD" for issue in old.issues)
-    else:
-        await repo.lock_commitments(conn, [new.value])
-        duplicate = await repo.commitment_taken(conn, new.value, except_id=after.record_id)
-    if not duplicate:
+    old_central = sorted(central_values(before.central_numbers))
+    new_central = central_values(after.central_numbers)
+    flagged = any(issue.code == "DUPLICATE_RECORD" for issue in old.issues)
+    if new.value == old.value and sorted(new_central) == old_central and not flagged:
         return after
-    flagged = new.model_copy(
-        update={
-            "issues": [*new.issues, make_issue("DUPLICATE_RECORD")],
-            "needs_review": not new.confirmed,
-        }
-    )
-    fields = after.fields.model_copy(update={"commitment_number": flagged})
+    await repo.lock_commitments(conn, [new.value])
+    same = await repo.same_records(conn, new.value, new_central, except_id=after.record_id)
+    if not same:
+        return after
+    fields = after.fields.model_copy(update={"commitment_number": flag_duplicate(new, same)})
     return after.model_copy(
         update={
             "fields": fields,
@@ -362,7 +391,7 @@ async def _save(conn: AsyncConnection, record: Record, now: datetime) -> None:
         central_numbers=[item.model_dump(mode="json") for item in record.central_numbers],
         national_id=fields.national_id.value,
         commitment_number=fields.commitment_number.value,
-        central_values=[item.value for item in record.central_numbers if item.value],
+        central_values=central_values(record.central_numbers),
         first_name=fields.first_name.value,
         last_name=fields.last_name.value,
         sender=fields.sender.value,
@@ -421,8 +450,8 @@ async def patch_record(
             await _save(conn, await _rerun(conn, sibling, copied, today=today), now)
             await _log(conn, sibling.record_id, shared_events, user, now)
 
-        saved = to_record(await repo.get_record(conn, record_id))
-        siblings = [to_record(await repo.get_record(conn, s["id"])) for s in sibling_rows]
+        saved = await _reload(conn, record_id)
+        siblings = [await _reload(conn, s["id"]) for s in sibling_rows]
     return RecordPatchResponse(record=saved, siblings=siblings)
 
 
@@ -455,7 +484,7 @@ async def approve_record(
             await _save(conn, ruled, now)
         await repo.approve_record(conn, record_id, user_id=user.id, now=now)
         await _log(conn, record_id, [("approved", None)], user, now)
-        return to_record(await repo.get_record(conn, record_id))
+        return await _reload(conn, record_id)
 
 
 async def approve_many(

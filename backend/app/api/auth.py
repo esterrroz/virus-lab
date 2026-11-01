@@ -12,17 +12,19 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Request, Response
 from psycopg_pool import AsyncConnectionPool
 
-from app.api.errors import ProblemError
+from app.api.deps import SESSION_COOKIE, get_pool, require_user, same_origin, utc_now
+from app.api.errors import ProblemError, Responses
 from app.auth import sessions
-from app.auth.deps import SESSION_COOKIE, check_origin, get_pool, require_user, utc_now
 from app.auth.passwords import dummy_hash, verify_password
 from app.schemas.api import LoginRequest, Problem, User
 from app.settings import Settings, get_settings
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 
-_UNAUTHENTICATED = {401: {"model": Problem, "description": 'No valid session ("unauthenticated")'}}
-_FOREIGN_ORIGIN = {
+_UNAUTHENTICATED: Responses = {
+    401: {"model": Problem, "description": 'No valid session ("unauthenticated")'}
+}
+_FOREIGN_ORIGIN: Responses = {
     403: {"model": Problem, "description": 'Not from our page ("origin_not_allowed")'}
 }
 
@@ -50,7 +52,7 @@ async def login(
     now: Annotated[datetime, Depends(utc_now)],
 ) -> User:
     """Sign in and set the session cookie (HttpOnly, Secure, SameSite=Strict)."""
-    check_origin(request, settings)
+    same_origin(request, settings)
     # Decide inside the transaction, answer after it: a failed attempt must be committed.
     async with pool.connection() as conn, conn.transaction():
         row = await sessions.user_for_login(conn, body.username)
@@ -60,6 +62,7 @@ async def login(
         elif row and row["is_active"] and verify_password(body.password, row["password_hash"]):
             await sessions.record_login(conn, row["id"], now)
             token = await sessions.create_session(conn, row["id"], now)
+            user = User(id=row["id"], username=row["username"], display_name=row["display_name"])
             outcome = "ok"
         else:
             if row is None:
@@ -80,7 +83,7 @@ async def login(
     response.set_cookie(
         SESSION_COOKIE, token, httponly=True, secure=True, samesite="strict", path="/"
     )
-    return User(id=row["id"], username=row["username"], display_name=row["display_name"])
+    return user
 
 
 @router.post("/logout", status_code=204, responses=_FOREIGN_ORIGIN)
@@ -91,7 +94,7 @@ async def logout(
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> None:
     """End the session on the server too, so the token is useless even if it leaked."""
-    check_origin(request, settings)
+    same_origin(request, settings)
     token = request.cookies.get(SESSION_COOKIE)
     if token:
         async with pool.connection() as conn:

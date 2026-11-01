@@ -5,11 +5,19 @@
   flex-direction: column;
   gap: 12px;
   min-inline-size: 0;
-  padding: 20px;
+  padding: 16px;
   background: var(--color-surface, #ffffff);
   border: 1px solid var(--color-border, #dde3e9);
   border-radius: var(--radius-lg, 12px);
   color: var(--color-text, #0f1b2a);
+}
+
+.review-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 16px;
 }
 
 .review-title {
@@ -18,7 +26,7 @@
   align-items: baseline;
   gap: 4px 12px;
   margin: 0;
-  font-size: 1.125rem;
+  font-size: 1.25rem;
 }
 
 .review-count {
@@ -34,8 +42,9 @@
   text-align: center;
 }
 
+/* Rows wrap instead of scrolling sideways. */
 .review-scroll {
-  overflow-x: auto;
+  overflow-x: hidden;
 }
 
 .review-table {
@@ -50,12 +59,13 @@
   padding-inline: 10px;
   border-block-end: 1px solid var(--color-border, #dde3e9);
   text-align: start;
-  vertical-align: top;
+  vertical-align: middle;
   white-space: nowrap;
 }
 
 .review-table thead th {
   color: var(--color-text-muted, #52606d);
+  font-size: 0.75rem;
   font-weight: 600;
 }
 
@@ -63,18 +73,71 @@
   cursor: pointer;
 }
 
+.review-table tbody tr:hover {
+  background: var(--color-surface-muted, #f7f9fb);
+}
+
 .review-table tbody tr.is-selected {
   background: var(--color-accent-soft, #e5f1f2);
+  /* A bar of the accent at the row's start (the right, in RTL). */
+  box-shadow: inset -4px 0 0 var(--color-accent, #0b6e79);
+}
+
+.review-table tbody tr {
+  transition: background-color 0.12s ease;
+}
+
+/* The source takes two lines: the file name, then the page under it. */
+.review-table tbody th,
+.review-table .review-name {
+  white-space: normal;
 }
 
 .review-select {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  overflow-wrap: break-word;
   padding: 0;
   border: 0;
   background: none;
   color: inherit;
   font: inherit;
   font-weight: 600;
+  text-align: start;
   cursor: pointer;
+}
+
+.review-page-number {
+  color: var(--color-text-muted, #52606d);
+  font-size: 0.75rem;
+  font-weight: normal;
+}
+
+.review-number {
+  font-variant-numeric: tabular-nums;
+}
+
+/* A row's status: text first, the color only backs it up. */
+.review-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.review-badge.is-flagged {
+  color: var(--color-warning, #8a5300);
+  background: var(--color-warning-soft, #fff4db);
+  border: 1px solid var(--color-warning-border, #d9a514);
+}
+
+.review-badge.is-ready {
+  color: var(--color-accent-strong, #08515a);
+  background: var(--color-accent-soft, #e5f1f2);
+  border: 1px solid var(--color-accent, #0b6e79);
 }
 
 .review-select:focus-visible {
@@ -97,8 +160,7 @@
 }
 
 /* Needs review: orange corner mark plus the label's text, never color alone. */
-.review-cell.is-flagged,
-.review-status.is-flagged {
+.review-cell.is-flagged {
   background: var(--color-warning-soft, #fff4db);
 }
 
@@ -111,13 +173,318 @@
   border-inline-start: 10px solid transparent;
 }
 
-.review-cell.is-flagged .review-confidence,
-.review-status.is-flagged {
+.review-cell.is-flagged .review-confidence {
   color: var(--color-warning, #8a5300);
   font-weight: 600;
+}
+
+/* The whole cell opens the editor: a button, so the keyboard reaches it too. */
+.review-cell-value {
+  display: block;
+  inline-size: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: start;
+  cursor: text;
+}
+
+.review-cell-value:focus-visible,
+.review-cell-input:focus-visible {
+  outline: 3px solid var(--color-focus, #1d4ed8);
+  outline-offset: 2px;
+}
+
+.review-cell-input {
+  inline-size: 100%;
+  min-inline-size: 8ch;
+  padding: 4px 6px;
+  font: inherit;
+  border: 1px solid var(--color-accent, #0b6e79);
+  border-radius: var(--radius-md, 8px);
+}
+
+.review-confirm {
+  margin-block-start: 4px;
+  padding: 2px 8px;
+  color: var(--color-accent-strong, #08515a);
+  background: var(--color-surface, #ffffff);
+  border: 1px solid var(--color-accent, #0b6e79);
+  border-radius: var(--radius-md, 8px);
+  font: inherit;
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+
+.review-confirm:focus-visible {
+  outline: 3px solid var(--color-focus, #1d4ed8);
+  outline-offset: 2px;
+}
+
+.review-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.review-list li + li {
+  margin-block-start: 4px;
+}
+
+.review-list li.is-flagged .review-confidence {
+  color: var(--color-warning, #8a5300);
+  font-weight: 600;
+}
+
+.review-list-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.review-list-item,
+.review-list-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.review-list-edit,
+.review-list-item button,
+.review-list-actions button {
+  padding: 2px 8px;
+  font: inherit;
+  font-size: 0.75rem;
+  background: var(--color-surface, #ffffff);
+  border: 1px solid var(--color-border-strong, #9fb3c8);
+  border-radius: var(--radius-md, 8px);
+  cursor: pointer;
+}
+
+.review-list-edit {
+  margin-block-start: 4px;
+}
+
+.review-approve-all {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+}
+
+.review-approve-all button {
+  padding: 8px 16px;
+  font: inherit;
+  font-weight: 600;
+  color: #ffffff;
+  background: var(--color-accent, #0b6e79);
+  border: 0;
+  border-radius: var(--radius-md, 8px);
+  cursor: pointer;
+}
+
+.review-approve-all button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.review-approve-all button:focus-visible {
+  outline: 3px solid var(--color-focus, #1d4ed8);
+  outline-offset: 2px;
+}
+
+.review-summary {
+  color: var(--color-success, #1e6b3a);
+  font-weight: 600;
+}
+
+.review-approve {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+.review-approve button,
+.review-actions > button {
+  padding: 4px 12px;
+  font: inherit;
+  font-weight: 600;
+  color: #ffffff;
+  background: var(--color-accent, #0b6e79);
+  border: 0;
+  border-radius: var(--radius-md, 8px);
+  cursor: pointer;
+}
+
+.review-approve button:disabled {
+  color: var(--color-text-muted, #52606d);
+  background: var(--color-surface-muted, #f7f9fb);
+  border: 1px solid var(--color-border, #dde3e9);
+  cursor: not-allowed;
+}
+
+.review-approve button:focus-visible,
+.review-actions > button:focus-visible {
+  outline: 3px solid var(--color-focus, #1d4ed8);
+  outline-offset: 2px;
+}
+
+.review-delete {
+  margin-block-start: 4px;
+  padding: 2px 8px;
+  font: inherit;
+  font-size: 0.75rem;
+  color: var(--color-danger, #a12222);
+  background: var(--color-surface, #ffffff);
+  border: 1px solid var(--color-danger, #a12222);
+  border-radius: var(--radius-md, 8px);
+  cursor: pointer;
+}
+
+.review-delete:focus-visible {
+  outline: 3px solid var(--color-focus, #1d4ed8);
+  outline-offset: 2px;
+}
+
+.review-blocking {
+  max-inline-size: 22ch;
+  color: var(--color-warning, #8a5300);
+  font-size: 0.75rem;
+  white-space: normal;
+}
+
+.review-approved {
+  color: var(--color-success, #1e6b3a);
+  font-weight: 600;
+}
+
+.review-table .review-approved {
+  display: inline-block;
+  padding: 2px 8px;
+  background: var(--color-success-soft, #e6f4ea);
+  border-radius: 999px;
+  font-size: 0.75rem;
+}
+
+.review-cell-error {
+  display: block;
+  max-inline-size: 28ch;
+  margin-block-start: 4px;
+  color: var(--color-danger, #a12222);
+  font-size: 0.75rem;
+  white-space: normal;
 }
 
 .review-confidence.is-corrected,
 .review-confidence.is-confirmed {
   color: var(--color-success, #1e6b3a);
+}
+
+/* Nothing ready: a quiet note instead of a big button that can't be pressed. */
+.review-approve-all-note {
+  color: var(--color-text-muted, #56677a);
+  font-size: 0.8125rem;
+}
+
+/* Nothing left to fix: approve turns green, with a small pop when it does. */
+.review-approve button.is-ready:not(:disabled) {
+  background: var(--color-success, #1e6b3a);
+  animation: review-ready-pop 0.35s ease-out;
+}
+
+.review-approve button.is-ready:not(:disabled):hover {
+  box-shadow: 0 6px 16px rgb(30 107 58 / 0.3);
+}
+
+@keyframes review-ready-pop {
+  0% {
+    transform: scale(0.92);
+  }
+  60% {
+    transform: scale(1.06);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+/* The ID check while typing: an orange line under the input, never color alone. */
+.review-cell-input.is-invalid {
+  border-color: var(--color-warning-border, #d9a514);
+  box-shadow: 0 0 0 2px var(--color-warning-soft, #fff4db);
+}
+
+.review-cell-hint {
+  display: block;
+  margin-block-start: 4px;
+  color: var(--color-warning, #8a5300);
+  font-size: 0.75rem;
+  font-weight: 600;
+  white-space: normal;
+}
+
+.review-cell-hint:empty {
+  display: none;
+}
+
+/* The list with no records: a picture, a line, and the way to the upload. */
+.review-empty-state {
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding-block: 40px;
+  text-align: center;
+}
+
+.review-empty-art {
+  color: var(--color-border-strong, #a9bccf);
+}
+
+.review-empty-title {
+  margin: 0;
+  font-size: 1.125rem;
+}
+
+.review-empty-state .review-empty {
+  padding: 0;
+  max-inline-size: 32ch;
+}
+
+.review-empty-button {
+  margin-block-start: 8px;
+  min-block-size: 44px;
+  padding-inline: 24px;
+  color: #ffffff;
+  background: var(--gradient-brand, #1f6fb2);
+  border: 0;
+  border-radius: var(--radius-md, 10px);
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.review-empty-button:focus-visible {
+  outline: 3px solid var(--color-focus, #1d4ed8);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .review-approve button.is-ready:not(:disabled) {
+    animation: none;
+  }
+}
+
+/* The list is a container, so a narrow list (beside a wide record) drops the ID
+   column instead of breaking the file name letter by letter. The ID is in the
+   record panel too. */
+.review {
+  container: review-list / inline-size;
+}
+
+@container review-list (max-width: 380px) {
+  .review-table tr > :nth-child(3) {
+    display: none;
+  }
 }

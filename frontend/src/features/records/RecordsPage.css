@@ -3,19 +3,171 @@
 .records {
   display: flex;
   flex-direction: column;
-  gap: 16px;
-  padding-block: 16px;
+  gap: 14px;
+  padding-block: 18px;
+}
+
+/* The title, with the counts beside it as cards that filter the list. */
+.records-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px 24px;
 }
 
 .records-title {
   margin: 0;
-  font-size: 1.4rem;
+  font-size: 1.6rem;
+  font-weight: 800;
+  color: var(--color-text, #12233a);
 }
 
+/* The counts as one row of tabs on a white bar. Each wears its status color, and
+   the pressed one fills with it. */
 .records-counts {
   display: flex;
   flex-wrap: wrap;
+  gap: 4px;
+  padding: 5px;
+  background: var(--color-surface, #fff);
+  border: 1px solid var(--color-border, #e1e8ef);
+  border-radius: var(--radius-lg, 16px);
+  box-shadow: var(--shadow-card, none);
+}
+
+.records .records-counts .records-count {
+  display: inline-flex;
+  align-items: center;
   gap: 8px;
+  min-block-size: 44px;
+  padding: 4px 14px;
+  font-weight: 700;
+  color: var(--color-text-muted, #56677a);
+  background: transparent;
+  border: 0;
+  border-radius: 12px;
+  transition: background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.records-count strong {
+  min-inline-size: 2ch;
+  padding: 0 8px;
+  font-size: 0.875rem;
+  font-weight: 800;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  border-radius: 999px;
+}
+
+.records-count-dot {
+  inline-size: 10px;
+  block-size: 10px;
+  border-radius: 999px;
+  background: var(--color-accent, #1f6fb2);
+}
+
+.records .records-counts .records-count.is-all strong {
+  color: var(--color-text-muted, #56677a);
+  background: var(--color-surface-muted, #f5f8fb);
+}
+
+.records .records-counts .records-count.is-pending,
+.records .records-counts .records-count.is-pending strong {
+  color: var(--color-accent-strong, #17588f);
+}
+
+.records .records-counts .records-count.is-pending strong {
+  background: var(--color-accent-soft, #e7f1fa);
+}
+
+.records .records-counts .records-count.is-review,
+.records .records-counts .records-count.is-review strong {
+  color: var(--color-warning, #8a5300);
+}
+
+.records .records-counts .records-count.is-review strong {
+  background: var(--color-warning-soft, #fff4db);
+}
+
+.records .records-counts .records-count.is-approved,
+.records .records-counts .records-count.is-approved strong {
+  color: var(--color-success, #1e6b3a);
+}
+
+.records .records-counts .records-count.is-approved strong {
+  background: var(--color-success-soft, #e6f4ea);
+}
+
+.records .records-counts .records-count:hover {
+  background: var(--color-surface-muted, #f5f8fb);
+}
+
+/* Pressed: the tab fills with its color; the count sits on a lighter pill. */
+.records .records-counts .records-count[aria-pressed="true"],
+.records .records-counts .records-count[aria-pressed="true"] strong {
+  color: #ffffff;
+}
+
+.records .records-counts .records-count[aria-pressed="true"] strong {
+  background: rgb(255 255 255 / 0.22);
+}
+
+.records .records-counts .records-count.is-all[aria-pressed="true"] {
+  background: var(--color-text, #12233a);
+}
+
+.records .records-counts .records-count.is-pending[aria-pressed="true"] {
+  background: var(--color-accent, #1f6fb2);
+  box-shadow: 0 4px 12px rgb(31 111 178 / 0.3);
+}
+
+.records .records-counts .records-count.is-pending[aria-pressed="true"] .records-count-dot {
+  background: #ffffff;
+}
+
+.records .records-counts .records-count.is-review[aria-pressed="true"],
+.records .records-counts .records-count.is-review[aria-pressed="true"] strong {
+  color: var(--color-on-warning, #3d2600);
+}
+
+.records .records-counts .records-count.is-review[aria-pressed="true"] {
+  background: var(--color-warning-fill, #f0b429);
+  box-shadow: 0 4px 12px rgb(224 154 0 / 0.35);
+}
+
+.records .records-counts .records-count.is-review[aria-pressed="true"] strong {
+  background: rgb(255 255 255 / 0.55);
+}
+
+.records .records-counts .records-count.is-approved[aria-pressed="true"] {
+  background: var(--color-success, #1e6b3a);
+  box-shadow: 0 4px 12px rgb(30 107 58 / 0.3);
+}
+
+/* Search, filters and export, together on one white card. */
+.records-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  justify-content: space-between;
+  gap: 12px 20px;
+  padding: 14px 18px;
+  background: var(--color-surface, #fff);
+  border: 1px solid var(--color-border, #e1e8ef);
+  border-radius: var(--radius-lg, 16px);
+  box-shadow: var(--shadow-card, none);
+}
+
+/* The list and its paging, on a card of their own. */
+.records-card {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--color-surface, #fff);
+  border: 1px solid var(--color-border, #e1e8ef);
+  border-radius: var(--radius-lg, 16px);
+  box-shadow: var(--shadow-card, none);
 }
 
 .records button,
@@ -34,12 +186,6 @@
   cursor: default;
 }
 
-.records-counts button[aria-pressed="true"] {
-  color: var(--color-accent-strong, #08515a);
-  background: var(--color-accent-soft, #e5f1f2);
-  border-color: var(--color-accent, #0b6e79);
-}
-
 .records button:focus-visible,
 .records a:focus-visible,
 .records input:focus-visible,
@@ -49,11 +195,40 @@
   outline-offset: 2px;
 }
 
+/* The filters fill their own row of the toolbar. Each field's flex-basis is
+   the narrowest width it still reads well at, and the grow factor is its share
+   of any extra room. So the fields shrink together as the screen narrows, and
+   only when one would go below its basis does it wrap to the next row. */
+.records-toolbar > .records-filters {
+  flex: 1 1 100%;
+}
+
 .records-filters {
   display: flex;
   flex-wrap: wrap;
   align-items: end;
   gap: 12px;
+}
+
+.records-filters > * {
+  min-inline-size: 0;
+}
+
+.records-filters .records-search {
+  flex: 3 1 240px;
+}
+
+.records-filters .records-filter-status {
+  flex: 0.5 1 110px;
+}
+
+.records-filters .records-filter-sender,
+.records-filters .records-filter-form {
+  flex: 1.5 1 140px;
+}
+
+.records-filters .records-dates {
+  flex: 2 1 280px;
 }
 
 .records-filters label {
@@ -64,23 +239,134 @@
   color: var(--color-text-muted, #52606d);
 }
 
-.records-filters .records-check {
-  flex-direction: row;
-  align-items: center;
-  padding-block-end: 8px;
-}
-
 .records-filters input,
 .records-filters select {
-  padding: 6px 8px;
+  box-sizing: border-box; /* date inputs are content-box by default, so they came out taller */
+  min-inline-size: 0;
+  min-block-size: 38px;
+  padding: 6px 10px;
   font: inherit;
   color: var(--color-text, #0f1b2a);
-  border: 1px solid var(--color-border-strong, #9fb3c8);
+  background: var(--color-surface-muted, #f5f8fb);
+  border: 1px solid var(--color-border, #e1e8ef);
   border-radius: var(--radius-md, 8px);
+  transition: border-color 0.15s ease, background 0.15s ease;
 }
 
-.records-search input {
-  min-inline-size: 260px;
+.records-filters input:hover,
+.records-filters select:hover {
+  border-color: var(--color-border-strong, #a9bccf);
+}
+
+.records-filters input:focus,
+.records-filters select:focus {
+  background: var(--color-surface, #fff);
+  border-color: var(--color-accent, #1f6fb2);
+}
+
+/* The search: a violet magnifier at its start, and a violet line around it. */
+.records-search-box {
+  position: relative;
+  display: flex;
+}
+
+.records-search-box svg {
+  position: absolute;
+  inset-inline-start: 12px;
+  inset-block-start: 50%;
+  translate: 0 -50%;
+  color: var(--color-violet, #7c5cd6);
+  pointer-events: none;
+}
+
+.records-search-box input {
+  flex: 1;
+  padding-inline-start: 38px;
+  background: var(--color-surface, #fff);
+  border: 1.5px solid var(--color-violet-line, #d1c6f1);
+}
+
+.records-search-box input:hover,
+.records-search-box input:focus {
+  border-color: var(--color-violet, #7c5cd6);
+}
+
+/* The filters in use, as chips under the controls; each × takes one off. */
+.records-active {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.records-active-label {
+  font-size: 0.875rem;
+  color: var(--color-text-muted, #56677a);
+}
+
+.records .records-active .records-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-block-size: 32px;
+  padding: 2px 8px 2px 12px;
+  font-size: 0.875rem;
+  font-weight: 700;
+  color: var(--color-accent-strong, #17588f);
+  background: var(--color-accent-soft, #e7f1fa);
+  border: 1px solid var(--color-accent-line, #cde1f2);
+  border-radius: 999px;
+}
+
+.records .records-active .records-chip.is-review {
+  color: var(--color-warning, #8a5300);
+  background: var(--color-warning-soft, #fff4db);
+  border-color: var(--color-warning-line, #f1dc9f);
+}
+
+.records .records-active .records-chip.is-approved {
+  color: var(--color-success, #1e6b3a);
+  background: var(--color-success-soft, #e6f4ea);
+  border-color: var(--color-success-line, #bfe3cb);
+}
+
+.records .records-active .records-active-clear {
+  padding: 2px 4px;
+  font-size: 0.875rem;
+  font-weight: 700;
+  color: var(--color-accent-strong, #17588f);
+  background: none;
+  border: 0;
+}
+
+.records .records-active .records-active-clear:hover {
+  text-decoration: underline;
+}
+
+/* The received-date range: one title over "from – to". */
+.records-dates {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-inline-size: 0;
+}
+
+.records-dates legend {
+  padding: 0;
+  margin-block-end: 4px;
+  font-size: 0.9rem;
+  color: var(--color-text-muted, #52606d);
+}
+
+.records-dates-inputs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--color-text-muted, #52606d);
+}
+
+.records-dates-inputs input {
+  flex: 1 1 0;
 }
 
 .records-banner {
@@ -101,44 +387,280 @@
 
 .records-scroll {
   overflow-x: auto;
+  container-type: inline-size;
 }
 
 .records-table {
   inline-size: 100%;
-  border-collapse: collapse;
+  border-collapse: separate;
+  border-spacing: 0;
 }
 
+/* Text may wrap, so the table fits its card instead of scrolling sideways.
+   Single values (numbers, dates, the status) stay on one line. */
 .records-table th,
 .records-table td {
-  padding: 8px 10px;
+  padding: 10px clamp(8px, 1vw, 14px);
   text-align: start;
   border-block-end: 1px solid var(--color-border, #dde3e9);
-  white-space: nowrap;
 }
 
+/* The header stays on top while the list scrolls under it. */
 .records-table th {
-  font-weight: 600;
+  position: sticky;
+  inset-block-start: 0;
+  z-index: 1;
+  font-size: 0.8125rem;
+  font-weight: 700;
+  color: var(--color-text-muted, #56677a);
   background: var(--color-surface-muted, #f7f9fb);
 }
 
 .records-table tbody tr {
   cursor: pointer;
+  transition: background 0.12s ease;
+}
+
+.records-table tbody tr:nth-child(even) {
+  background: rgb(245 248 251 / 0.6);
 }
 
 .records-table tbody tr:hover {
-  background: var(--color-surface-muted, #f7f9fb);
+  background: var(--color-accent-soft, #e7f1fa);
+}
+
+.records-table tbody tr:last-child td {
+  border-block-end: 0;
+}
+
+/* The name is how a row is found: it keeps one line, others wrap first. */
+.records-table td a {
+  color: var(--color-accent-strong, #17588f);
+  font-weight: 600;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.records-table tbody tr:hover td a {
+  text-decoration: underline;
 }
 
 .records-number {
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* A list of numbers wraps between them, never inside one. */
+.records-centrals {
+  white-space: normal;
+}
+
+/* Too narrow for eight columns: each row becomes a card. The name and status
+   head it, the other fields sit under it with their titles, and the headers
+   turn into a row of sort chips. */
+@container (max-width: 840px) {
+  .records-table,
+  .records-table thead,
+  .records-table tbody {
+    display: block;
+  }
+
+  .records-table thead tr {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    padding: 10px 16px;
+    background: var(--color-surface-muted, #f7f9fb);
+    border-block-end: 1px solid var(--color-border, #e1e8ef);
+  }
+
+  .records-table thead tr::before {
+    content: "מיון:";
+    margin-inline-end: 2px;
+    font-size: 0.8125rem;
+    font-weight: 700;
+    color: var(--color-text-muted, #56677a);
+  }
+
+  .records-table th {
+    position: static;
+    padding: 0;
+    background: none;
+    border: 0;
+  }
+
+  /* Central numbers can't be sorted, so they have no chip. */
+  .records-table th:not([aria-sort]) {
+    display: none;
+  }
+
+  .records-table th .records-sort {
+    padding: 4px 12px;
+    background: var(--color-surface, #fff);
+    border: 1px solid var(--color-border, #e1e8ef);
+    border-radius: 999px;
+  }
+
+  .records-table th[aria-sort="ascending"] .records-sort,
+  .records-table th[aria-sort="descending"] .records-sort {
+    color: var(--color-accent-strong, #17588f);
+    background: var(--color-accent-soft, #e7f1fa);
+    border-color: var(--color-accent, #0b6e79);
+  }
+
+  .records-table tbody tr {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 10px 16px;
+    padding: 14px 16px;
+    border-block-end: 1px solid var(--color-border, #e1e8ef);
+  }
+
+  .records-table tbody tr:last-child {
+    border-block-end: 0;
+  }
+
+  /* flex-start, not stretch: a number's <bdi> is LTR and would sit on the left. */
+  .records-table td {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+    min-inline-size: 0;
+    padding: 0;
+    border: 0;
+  }
+
+  .records-table td::before {
+    content: attr(data-label);
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--color-text-muted, #56677a);
+  }
+
+  .records-table td:first-child {
+    grid-column: 1 / -2;
+    justify-content: center;
+    font-size: 1.0625rem;
+  }
+
+  .records-table td:first-child a {
+    white-space: normal;
+  }
+
+  .records-table td:last-child {
+    grid-column: -2 / -1;
+    grid-row: 1;
+    align-items: end;
+    justify-content: center;
+  }
+
+  .records-table td:first-child::before,
+  .records-table td:last-child::before {
+    content: none;
+  }
+}
+
+@container (max-width: 520px) {
+  .records-table tbody tr {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* The status as a pill: icon, text and color together. */
+.records-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 12px;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  white-space: nowrap;
+  color: var(--color-accent-strong, #17588f);
+  background: var(--color-accent-soft, #e7f1fa);
+  border-radius: 999px;
 }
 
 .records-status.is-approved {
   color: var(--color-success, #1e6b3a);
+  background: var(--color-success-soft, #e6f4ea);
 }
 
 .records-status.is-review {
   color: var(--color-warning, #8a5300);
+  background: var(--color-warning-soft, #fff4db);
+}
+
+/* The central numbers on a pale blue pill, wrapping between numbers. */
+.records-centrals-list {
+  padding: 1px 8px;
+  font-weight: 700;
+  color: var(--color-accent-strong, #17588f);
+  background: var(--color-accent-soft, #e7f1fa);
+  border-radius: 6px;
+  box-decoration-break: clone;
+}
+
+/* A sender as a tag in its own color (senderTag), the same on every row. */
+.records-sender {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 12px;
+  font-size: 0.875rem;
+  font-weight: 700;
+  border-radius: 999px;
+}
+
+.records-sender::before {
+  content: "";
+  flex: none;
+  inline-size: 8px;
+  block-size: 8px;
+  background: currentColor;
+  border-radius: 999px;
+}
+
+.records-sender.is-tag-1 {
+  color: var(--color-tag-1, #0b6f86);
+  background: var(--color-tag-1-soft, #e0f5f9);
+}
+
+.records-sender.is-tag-2 {
+  color: var(--color-tag-2, #5b3fb0);
+  background: var(--color-tag-2-soft, #f0ecfb);
+}
+
+.records-sender.is-tag-3 {
+  color: var(--color-tag-3, #a0275a);
+  background: var(--color-tag-3-soft, #fcebf2);
+}
+
+.records-sender.is-tag-4 {
+  color: var(--color-tag-4, #3346a8);
+  background: var(--color-tag-4-soft, #eaedfb);
+}
+
+.records-sender.is-tag-5 {
+  color: var(--color-tag-5, #4a6510);
+  background: var(--color-tag-5-soft, #eff6df);
+}
+
+.records-sender.is-tag-6 {
+  color: var(--color-tag-6, #94401c);
+  background: var(--color-tag-6-soft, #fbeee7);
+}
+
+.records-form {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.records-form svg {
+  flex: none;
+  color: var(--color-brand-teal, #0ea5c6);
 }
 
 .records-pages {
@@ -146,6 +668,56 @@
   align-items: center;
   justify-content: center;
   gap: 12px;
+  padding: 10px;
+  color: var(--color-text-muted, #56677a);
+  font-size: 0.875rem;
+  border-block-start: 1px solid var(--color-border, #e1e8ef);
+}
+
+.records-pages span {
+  padding: 4px 14px;
+  font-weight: 700;
+  color: var(--color-accent-strong, #17588f);
+  background: var(--color-accent-soft, #e7f1fa);
+  border-radius: 999px;
+}
+
+.records .records-pages button {
+  min-block-size: 36px;
+  padding-inline: 16px;
+  border-color: var(--color-border, #e1e8ef);
+  border-radius: 999px;
+}
+
+/* On a wide screen the list fits the window: the page is as high as what is left
+   under the top bar, and only the rows scroll, under their header. */
+@media (min-width: 901px) {
+  .layout:has(.records) {
+    display: flex;
+    flex-direction: column;
+    block-size: 100svh;
+  }
+
+  .layout:has(.records) .layout-main {
+    flex: 1;
+    min-block-size: 0;
+  }
+
+  .records {
+    block-size: 100%;
+    box-sizing: border-box;
+  }
+
+  .records-card {
+    flex: 1;
+    min-block-size: 0;
+  }
+
+  .records-card .records-scroll {
+    flex: 1;
+    min-block-size: 0;
+    overflow: auto;
+  }
 }
 
 .record-page {
@@ -161,6 +733,55 @@
   inset-block-start: 16px;
 }
 
+/* On a wide screen the record fits the window, nothing to scroll: the page is as high
+   as what is left under the top bar, the details are packed, and the original page
+   is shown whole in the rest of the height (zoom in to read it closer). */
+@media (min-width: 901px) {
+  .layout:has(.record-page) {
+    display: flex;
+    flex-direction: column;
+    block-size: 100svh;
+  }
+
+  .layout:has(.record-page) .layout-bar {
+    padding-block: 8px;
+  }
+
+  .layout:has(.record-page) .layout-main {
+    flex: 1;
+    min-block-size: 0;
+  }
+
+  .record-page {
+    block-size: 100%;
+    box-sizing: border-box;
+    grid-template-rows: minmax(0, 1fr);
+    align-items: stretch;
+    gap: 16px;
+    padding-block: 12px;
+  }
+
+  .record-page > .preview {
+    position: static;
+    min-block-size: 0;
+    gap: 8px;
+    padding: 12px 16px;
+  }
+
+  .record-page .preview-frame {
+    flex: 1;
+    block-size: auto;
+    min-block-size: 0;
+    max-block-size: none;
+  }
+
+  /* Only a very short window scrolls the details, and then inside their own column. */
+  .record-main {
+    min-block-size: 0;
+    overflow-y: auto;
+  }
+}
+
 @media (max-width: 900px) {
   .record-page {
     grid-template-columns: minmax(0, 1fr);
@@ -171,42 +792,202 @@
   }
 }
 
+.record-page .preview-title {
+  font-size: 1rem;
+}
+
+.record-page .preview-source,
+.record-page .preview-highlight {
+  font-size: 0.8125rem;
+}
+
+.record-page .preview-button {
+  min-block-size: 28px;
+  font-size: 0.8125rem;
+}
+
 .record-main {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 10px;
+  font-size: 0.875rem;
+}
+
+/* The cards keep their full height. With overflow hidden a card could shrink in the
+   column and clip its last line (the meta chips, the last fields) out of sight. */
+.record-main > * {
+  flex-shrink: 0;
 }
 
 .record-back {
+  align-self: flex-start;
+  color: var(--color-accent-strong, #08515a);
+  text-decoration: none;
+}
+
+.record-back:hover {
+  text-decoration: underline;
+}
+
+/* The record at a glance: name, status and actions, then where it came from. */
+.record-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 16px;
+  background: var(--color-surface, #fff);
+  border: 1px solid var(--color-border, #dde3e9);
+  border-radius: var(--radius-lg, 12px);
+}
+
+.record-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+}
+
+.record-head .records-title {
+  font-size: 1.375rem;
+  line-height: 1.2;
+}
+
+/* The status as a pill: icon and text, the color only backs it up. */
+.record-head .records-status {
+  margin: 0;
+  padding: 2px 10px;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  border-radius: 999px;
+  background: var(--color-accent-soft, #e5f1f2);
   color: var(--color-accent-strong, #08515a);
 }
 
-.record-meta {
-  display: grid;
-  grid-template-columns: max-content 1fr;
-  gap: 4px 16px;
+.record-head .records-status.is-review {
+  background: var(--color-warning-soft, #fff4db);
+  color: var(--color-warning, #8a5300);
+}
+
+.record-head .records-status.is-approved {
+  color: var(--color-success, #1e6b3a);
+}
+
+.record-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-inline-start: auto;
+}
+
+/* What blocks approval sits on one line beside the button, not squeezed under it. */
+.record-actions .review-approve {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+}
+
+.record-actions .review-blocking {
+  max-inline-size: none;
+}
+
+.record-page .record-actions button {
+  padding: 5px 14px;
+}
+
+.record-page .record-actions .review-delete {
   margin: 0;
+  font-size: inherit;
+}
+
+/* File, form type and intake time side by side. */
+.record-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 24px;
+  margin: 0;
+  padding-block-start: 8px;
+  border-block-start: 1px solid var(--color-border, #dde3e9);
+  font-size: 0.8125rem;
+}
+
+.record-meta div {
+  display: flex;
+  gap: 6px;
 }
 
 .record-meta dt {
   color: var(--color-text-muted, #52606d);
 }
 
+.record-meta dt::after {
+  content: ":";
+}
+
 .record-meta dd {
   margin: 0;
+  font-weight: 500;
 }
 
 .record-issues {
   margin: 0;
-  padding: 8px 12px;
+  padding: 8px 14px;
   list-style: none;
   color: var(--color-warning, #8a5300);
   background: var(--color-warning-soft, #fff4db);
+  border: 1px solid var(--color-warning-border, #d9a514);
   border-radius: var(--radius-md, 8px);
 }
 
-.record-fields tr.is-flagged td {
-  background: var(--color-warning-soft, #fff4db);
+/* The fields: a card, the table wraps its text instead of growing sideways. */
+.record-card {
+  overflow: hidden;
+  background: var(--color-surface, #fff);
+  border: 1px solid var(--color-border, #dde3e9);
+  border-radius: var(--radius-lg, 12px);
+}
+
+/* The fields, compact: a line per field, so the whole record fits without scrolling.
+   The value sits beside its confidence, what was read beside how it was read. */
+.record-fields {
+  table-layout: fixed;
+  font-size: 0.8125rem;
+  line-height: 1.35;
+}
+
+.record-fields thead th:nth-child(1) {
+  inline-size: 15%;
+}
+
+.record-fields thead th:nth-child(2) {
+  inline-size: 35%;
+}
+
+.record-fields thead th {
+  padding-block: 6px;
+  font-size: 0.75rem;
+  color: var(--color-text-muted, #52606d);
+}
+
+.record-fields th,
+.record-fields td {
+  padding: 5px 12px;
+  vertical-align: middle;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.record-fields tbody tr:last-child > * {
+  border-block-end: 0;
+}
+
+.record-fields tbody tr {
+  cursor: default;
+}
+
+.record-fields tbody tr:hover > * {
+  background: var(--color-surface-muted, #f7f9fb);
 }
 
 .record-fields th[scope="row"] {
@@ -214,8 +995,541 @@
   background: none;
 }
 
+/* A field to check: a warm row with a stripe at its start, not only the color. */
+.record-fields tr.is-flagged > *,
+.record-fields tr.is-flagged:hover > * {
+  background: var(--color-warning-soft, #fff4db);
+}
+
+.record-fields tr.is-flagged th[scope="row"] {
+  border-inline-start: 4px solid var(--color-warning-border, #d9a514);
+}
+
+.record-fields tr.is-flagged td.review-cell.is-flagged::before {
+  display: none;
+}
+
+/* The value opens its editor on click: plain text, a frame only on hover and focus.
+   The value, its confidence and the "confirm" button on one line, while there is room. */
+.record-page .record-fields .review-cell-value {
+  display: inline-flex;
+  align-items: baseline;
+  vertical-align: middle;
+  margin-inline: -6px 8px;
+  padding: 1px 6px;
+  inline-size: auto;
+  max-inline-size: 100%;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 6px;
+}
+
+.record-page .record-fields .review-cell-value:hover {
+  background: var(--color-surface, #fff);
+  border-color: var(--color-border-strong, #9fb3c8);
+}
+
+.record-fields .review-value,
+.record-fields .review-confidence {
+  display: inline;
+}
+
+.record-fields .review-value {
+  font-size: 0.875rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The space is on the label, so an approved record (no button) keeps it too. */
+.record-fields .review-confidence {
+  margin-inline-start: 8px;
+  font-size: 0.85em;
+  white-space: nowrap;
+}
+
+.record-page .record-fields .review-confirm {
+  vertical-align: middle;
+  margin-block: 0;
+  padding: 1px 8px;
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
+
+/* What was read and how, on one line; the issues on a line under it. */
+.record-read > span {
+  display: block;
+}
+
+.record-read > .record-read-line {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-inline-size: 0;
+}
+
+.record-raw {
+  flex: none;
+  max-inline-size: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+/* As wide as its text, so it stays next to the raw value; cut only when too long. */
 .record-evidence {
-  white-space: normal;
-  max-inline-size: 280px;
+  flex: 0 1 auto;
+  min-inline-size: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.85em;
   color: var(--color-text-muted, #52606d);
+}
+
+.record-field-issues {
+  margin-block-start: 1px;
+  font-size: 0.9em;
+  font-weight: 600;
+  color: var(--color-warning, #8a5300);
+}
+
+.record-field-issues::before {
+  content: "⚠ ";
+}
+
+/* A wide screen: the fields fill what is left of the column, the rows share its
+   height, and the text grows with the window's height. Very short windows still
+   scroll, inside the column. */
+@media (min-width: 901px) {
+  .record-main > .record-card {
+    flex: 1 0 auto;
+  }
+
+  .record-fields {
+    block-size: 100%;
+    font-size: clamp(0.8125rem, 0.34rem + 1.07vh, 1.0625rem);
+  }
+
+  .record-fields .review-value {
+    font-size: clamp(0.875rem, 0.43rem + 1.07vh, 1.1875rem);
+  }
+
+  .record-fields th,
+  .record-fields td {
+    padding-inline: clamp(12px, 1.2vw, 20px);
+  }
+}
+
+/* A phone: each field is a small card. Name and value side by side, what was read
+   under them. The column titles stay for screen readers. */
+@media (max-width: 600px) {
+  .record-fields,
+  .record-fields tbody {
+    display: block;
+  }
+
+  .record-fields thead {
+    position: absolute;
+    inline-size: 1px;
+    block-size: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+  }
+
+  .record-fields tbody tr {
+    display: grid;
+    grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
+    align-items: baseline;
+    gap: 4px 12px;
+    padding: 10px 14px;
+    border-block-end: 1px solid var(--color-border, #e1e8ef);
+  }
+
+  .record-fields tbody tr:last-child {
+    border-block-end: 0;
+  }
+
+  /* min-inline-size: a long evidence line is cut, it doesn't widen the card. */
+  .record-fields th,
+  .record-fields td {
+    min-inline-size: 0;
+    padding: 0;
+    border: 0;
+  }
+
+  /* The row carries the color now, not its cells. */
+  .record-fields tbody tr > *,
+  .record-fields tbody tr:hover > *,
+  .record-fields tbody tr.is-flagged > *,
+  .record-fields tbody tr.is-flagged:hover > * {
+    background: none;
+  }
+
+  .record-fields td.record-read {
+    grid-column: 1 / -1;
+  }
+
+  .record-fields tr.is-flagged {
+    background: var(--color-warning-soft, #fff4db);
+    box-shadow: inset -4px 0 0 var(--color-warning-border, #d9a514);
+  }
+
+  .record-fields tr.is-flagged th[scope="row"] {
+    border-inline-start: 0;
+  }
+}
+
+.records-export {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.records-export-label {
+  color: var(--color-text-muted, #56677a);
+  font-size: 0.875rem;
+}
+
+/* Small violet pills: CSV filled, JSON soft. A side action, at the end of the row. */
+.records-toolbar .records-export {
+  margin-inline-start: auto;
+}
+
+.records-export a {
+  display: inline-flex;
+  align-items: center;
+  min-block-size: 32px;
+  padding: 0 14px;
+  font-size: 0.8125rem;
+  font-weight: 800;
+  color: var(--color-violet-strong, #543f92);
+  text-decoration: none;
+  background: var(--color-violet-soft, #f2effb);
+  border: 1px solid var(--color-violet-line, #d1c6f1);
+  border-radius: 999px;
+  transition: background 0.15s ease;
+}
+
+.records-export a:first-of-type {
+  color: #ffffff;
+  background: var(--color-violet, #7c5cd6);
+  border-color: var(--color-violet, #7c5cd6);
+}
+
+.records-export a:hover {
+  background: var(--color-violet-line, #d1c6f1);
+}
+
+.records-export a:first-of-type:hover {
+  background: var(--color-violet-strong, #543f92);
+}
+
+.records-export-none {
+  color: var(--color-text-muted, #52606d);
+}
+
+/* A sortable column header: the whole title is the button. */
+.records .records-sort {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  font: inherit;
+  font-weight: 600;
+  color: inherit;
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+
+.records-sort-arrow {
+  min-inline-size: 1ch;
+  color: var(--color-accent, #0b6e79);
+  font-size: 0.75rem;
+}
+
+/* ---- The record page, dressed like the rest of the site ---- */
+
+/* The way back, as a soft pill. */
+.record-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 14px;
+  font-weight: 600;
+  background: var(--color-surface, #fff);
+  border: 1px solid var(--color-border, #e1e8ef);
+  border-radius: 999px;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.record-back:hover {
+  text-decoration: none;
+  background: var(--color-accent-soft, #e7f1fa);
+  border-color: var(--color-accent, #1f6fb2);
+}
+
+/* The summary card: a brand stripe along its top, a soft shadow. */
+.record-summary {
+  position: relative;
+  overflow: hidden;
+  padding-block-start: 16px;
+  border-color: var(--color-border, #e1e8ef);
+  box-shadow: var(--shadow-card, none);
+}
+
+.record-summary::before {
+  content: "";
+  position: absolute;
+  inset-inline: 0;
+  inset-block-start: 0;
+  block-size: 4px;
+  background: linear-gradient(90deg, var(--color-brand-green, #9cc33b), var(--color-brand-teal, #0ea5c6) 50%, var(--color-brand-blue, #1f6fb2));
+}
+
+.record-avatar {
+  display: grid;
+  place-items: center;
+  flex: none;
+  inline-size: 42px;
+  block-size: 42px;
+  color: #ffffff;
+  background: var(--gradient-brand, #1f6fb2);
+  border-radius: 50%;
+  box-shadow: 0 4px 12px rgb(31 111 178 / 0.3);
+}
+
+.record-head .records-title {
+  font-weight: 800;
+}
+
+/* Approve: the main action, in the brand gradient. Blocked: plain, with the reason. */
+.record-page .record-actions .review-approve button {
+  min-block-size: 36px;
+  padding: 0 20px;
+  color: #ffffff;
+  background: var(--gradient-brand, #1f6fb2);
+  border: 0;
+  border-radius: 999px;
+  box-shadow: 0 4px 12px rgb(31 111 178 / 0.25);
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.record-page .record-actions .review-approve button:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 16px rgb(31 111 178 / 0.35);
+}
+
+.record-page .record-actions .review-approve button:disabled {
+  color: var(--color-text-muted, #56677a);
+  background: var(--color-surface-muted, #f5f8fb);
+  border: 1px solid var(--color-border, #e1e8ef);
+  box-shadow: none;
+}
+
+.record-page .record-actions .review-delete {
+  min-block-size: 36px;
+  padding: 0 18px;
+  color: var(--color-danger, #a12222);
+  background: var(--color-surface, #fff);
+  border: 1px solid var(--color-danger, #a12222);
+  border-radius: 999px;
+  transition: background 0.15s ease;
+}
+
+.record-page .record-actions .review-delete:hover {
+  background: var(--color-danger-soft, #fdecec);
+}
+
+.record-page .record-actions .review-approved {
+  padding: 6px 14px;
+  background: var(--color-success-soft, #e6f4ea);
+  border-radius: 999px;
+}
+
+/* File, form type and intake time as small chips. */
+.record-meta {
+  gap: 8px;
+  padding-block-start: 10px;
+}
+
+.record-meta div {
+  padding: 3px 12px;
+  background: var(--color-surface-muted, #f5f8fb);
+  border: 1px solid var(--color-border, #e1e8ef);
+  border-radius: 999px;
+}
+
+.record-issues {
+  border-radius: var(--radius-lg, 16px);
+}
+
+.record-card {
+  border-color: var(--color-border, #e1e8ef);
+  border-radius: var(--radius-lg, 16px);
+  box-shadow: var(--shadow-card, none);
+}
+
+.record-fields thead th {
+  letter-spacing: 0.01em;
+}
+
+.record-page > .preview {
+  border-radius: var(--radius-lg, 16px);
+  box-shadow: var(--shadow-card, none);
+}
+
+/* While it loads: bars for the fields, and a gray page where the form will be. */
+.record-loading-page {
+  min-block-size: 420px;
+  background: linear-gradient(
+    90deg,
+    var(--color-surface-muted, #f5f8fb) 0%,
+    var(--color-border, #e1e8ef) 40%,
+    var(--color-surface-muted, #f5f8fb) 80%
+  );
+  background-size: 300% 100%;
+  border-radius: var(--radius-lg, 16px);
+  animation: skeleton-shimmer 1.4s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .record-loading-page {
+    animation: none;
+  }
+}
+
+/* The record's history (RecordHistory): a button beside approve and delete, so it
+   adds no line to the header, and a window with every action. */
+.record-page .record-actions .record-history-open {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+/* On a wide screen the chips stay on one line: a long file name is cut, and its
+   full name shows on hover (title). */
+@media (min-width: 901px) {
+  .record-meta {
+    flex-wrap: nowrap;
+  }
+
+  .record-meta div {
+    flex: 0 0 auto;
+    min-inline-size: 0;
+  }
+
+  .record-meta div:first-child {
+    flex: 0 1 auto;
+  }
+
+  .record-meta div:first-child dd {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+/* A short laptop screen (720-820px high): tighter rows, so the record still fits. */
+@media (min-width: 901px) and (max-height: 820px) {
+  .layout:has(.record-page) .layout-bar {
+    padding-block: 4px;
+  }
+
+  .record-page {
+    padding-block: 8px;
+  }
+
+  .record-main {
+    gap: 8px;
+  }
+
+  .record-summary {
+    gap: 6px;
+    padding: 8px 14px;
+  }
+
+  .record-fields thead th {
+    padding-block: 5px;
+  }
+
+  .record-fields th,
+  .record-fields td {
+    padding: 3px 10px;
+    line-height: 1.3;
+  }
+}
+
+.history-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: rgb(15 27 42 / 0.45);
+}
+
+.history-window {
+  inline-size: min(480px, 100%);
+  max-block-size: min(70svh, 560px);
+  overflow-y: auto;
+  padding: 16px 20px;
+  background: var(--color-surface, #fff);
+  border-radius: var(--radius-lg, 12px);
+  box-shadow: 0 12px 40px rgb(15 27 42 / 0.25);
+}
+
+.history-window-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-block-end: 8px;
+}
+
+.history-window-head h2 {
+  margin: 0;
+  font-size: 1.0625rem;
+}
+
+.history-window-head button {
+  padding: 2px 10px;
+}
+
+.history-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.history-list li {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 2px 12px;
+  padding-block: 8px;
+  border-block-start: 1px solid var(--color-border, #dde3e9);
+}
+
+.history-what {
+  font-weight: 600;
+}
+
+.history-when {
+  grid-row: span 2;
+  align-self: center;
+  font-size: 0.8125rem;
+  color: var(--color-text-muted, #56677a);
+}
+
+.history-who,
+.history-note {
+  font-size: 0.8125rem;
+  color: var(--color-text-muted, #56677a);
+}
+
+.history-note {
+  margin: 8px 0 0;
 }

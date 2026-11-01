@@ -12,13 +12,35 @@ Owner: shared
 """
 
 from datetime import datetime
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field
 
 ModelStatus = Literal["found", "unclear", "not_found"]
 Severity = Literal["info", "warning", "error"]
 RecordStatus = Literal["pending", "approved"]
+# The records list's order: a column, ascending, or descending with a "-" in front.
+# Equal values keep the default order (newest first), so paging stays stable.
+RecordSort = Literal[
+    "created_at",
+    "-created_at",
+    "received_date",
+    "-received_date",
+    "last_name",
+    "-last_name",
+    "first_name",
+    "-first_name",
+    "national_id",
+    "-national_id",
+    "commitment_number",
+    "-commitment_number",
+    "sender",
+    "-sender",
+    "form_type",
+    "-form_type",
+    "status",
+    "-status",
+]
 
 # D17 in #15: the form family only. The organization itself is in `sender`, and the
 # Hebrew labels live in the UI. Same values as FormType in schemas/extraction.py.
@@ -58,10 +80,42 @@ IssueCode = Literal[
 ErrorCode = Literal["EXTRACTION_FAILED", "INVALID_FILE", "QUOTA_EXHAUSTED"]
 
 
+class DuplicateOf(BaseModel):
+    """An earlier record with the same commitment number and the same central numbers."""
+
+    record_id: str
+    created_at: datetime
+    created_by: str = Field(description="Who saved it, by display name.")
+
+
 class Issue(BaseModel):
     code: IssueCode
     severity: Severity
     message: str
+    duplicate_of: list[DuplicateOf] | None = Field(
+        default=None,
+        description="DUPLICATE_RECORD only: every earlier record that is the same, oldest first.",
+    )
+
+
+BoxEdge = Annotated[int, Field(ge=0, le=1000)]
+
+
+class FieldBox(BaseModel):
+    """Where the model read a value: a rectangle on one page of the form.
+
+    Edges are in thousandths of the page image as saved (upright, the same image
+    /api/v1/pages/{page_id}/image serves), 0 = top / left, 1000 = bottom / right.
+    Left is the image's own left: the page is never mirrored for RTL.
+    """
+
+    page_number: int = Field(
+        description="The page it was read on: the form's first or a continuation page."
+    )
+    top: BoxEdge
+    left: BoxEdge
+    bottom: BoxEdge
+    right: BoxEdge
 
 
 class FormField(BaseModel):
@@ -75,6 +129,9 @@ class FormField(BaseModel):
     needs_review: bool
     corrected: bool
     confirmed: bool
+    # Where `raw` was read. null when nothing was read, the model gave no usable box,
+    # or the record is older than boxes. A correction keeps it: it points at the source.
+    box: FieldBox | None = None
 
 
 class FormFields(BaseModel):
@@ -146,9 +203,11 @@ class Record(BaseModel):
     created_at: datetime
     updated_at: datetime
     approved_at: datetime | None
-    approved_by: str | None = Field(default=None, description="Username; null until approved.")
+    approved_by: str | None = Field(
+        default=None, description="Display name of who approved it; null until approved."
+    )
     updated_by: str | None = Field(
-        default=None, description="Username of the last edit; null if never edited."
+        default=None, description="Display name of who last edited it; null if never edited."
     )
 
 
@@ -194,6 +253,36 @@ class RecordList(BaseModel):
     counts: RecordCounts
 
 
+# --- GET /api/v1/stats
+
+
+class FieldCorrections(BaseModel):
+    field: str = Field(
+        description='A RecordFields name, or "central_numbers" for any central number.'
+    )
+    corrections: int
+
+
+class RecordStats(BaseModel):
+    """The overview screen: how much work is left and which fields needed a hand.
+
+    Over every record, with no filters.
+    """
+
+    pending: int
+    approved: int
+    needs_review: int = Field(description="Pending records with a field still flagged.")
+    fields_total: int = Field(
+        description="Fields in pending records, each central number counted on its own."
+    )
+    fields_flagged: int = Field(description="Of fields_total, the ones still flagged.")
+    corrections: int = Field(
+        description="Corrections by hand. Changing a field shared by a form's records counts once."
+    )
+    corrected_records: int = Field(description="Records with at least one correction.")
+    by_field: list[FieldCorrections] = Field(description="Most corrected first.")
+
+
 # --- POST /api/v1/extract
 
 
@@ -223,6 +312,25 @@ class ExtractResponse(BaseModel):
         description="The daily quota ran out after some pages were saved: stop sending "
         "files. The unread pages are in failed_pages with QUOTA_EXHAUSTED. When nothing "
         "was saved, extract answers 503 quota_exhausted instead.",
+    )
+
+
+# --- POST /api/v1/extract (202) and GET /api/v1/extract/jobs/{job_id}
+class ExtractJob(BaseModel):
+    """An upload read in the background. Ask again until status is not "running"."""
+
+    job_id: str
+    status: Literal["running", "done", "failed"]
+    done: int = Field(description="Pages read so far, failed ones included.")
+    total: int = Field(description="Pages in the upload. 0 until the files are split into pages.")
+    result: "ExtractResponse | None" = Field(
+        description='status "done": the saved records and the pages that failed.'
+    )
+    problem: "Problem | None" = Field(
+        description='status "failed": why, with the status POST /extract would have '
+        "answered: 413 too_many_pages; 503 quota_exhausted (nothing was saved, so the "
+        "file can be sent again); 500 extraction_stopped (the job broke or the server "
+        "stopped: some forms may be saved, check the records before sending again)."
     )
 
 
@@ -310,6 +418,27 @@ class BulkApproveResponse(BaseModel):
     skipped: list[SkippedRecord]
 
 
+# --- GET /api/v1/records/{record_id}/history
+
+EventAction = Literal["created", "corrected", "confirmed", "approved"]
+
+
+class RecordEvent(BaseModel):
+    """One line of a record's history: who did what, to which field, and when.
+    Never the values (D13)."""
+
+    at: datetime
+    action: EventAction
+    field: str | None = Field(
+        description='The field, e.g. "national_id" or "central_numbers[0]"; null for '
+        "created and approved."
+    )
+    username: str
+    display_name: str = Field(
+        description='"לפני הכניסה" for what was saved while the site had no sign-in (21.10-22.10).'
+    )
+
+
 # --- Auth (Dev-B plan 2.6): users are created only by scripts/create_user.py
 
 
@@ -339,3 +468,6 @@ class Problem(BaseModel):
         description='type "review_required" only: fields still flagged, e.g. "national_id", '
         '"central_numbers[1]".',
     )
+
+
+ExtractJob.model_rebuild()  # Problem is defined after it

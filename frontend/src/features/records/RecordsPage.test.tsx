@@ -7,6 +7,7 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import type { components } from "../../api/schema";
+import { senderTag } from "./format";
 import { RecordsPage } from "./RecordsPage";
 
 type RecordSummary = components["schemas"]["RecordSummary"];
@@ -116,11 +117,54 @@ describe("RecordsPage", () => {
     serve(list([summary()]));
     renderAt("/records?page=3");
 
-    await userEvent.setup().click(await screen.findByRole("button", { name: /דורשות בדיקה/ }));
+    const counts = within(await screen.findByRole("group", { name: "מונים" }));
+    await userEvent.setup().click(counts.getByRole("button", { name: /דורשות בדיקה/ }));
 
     expect(screen.getByTestId("where").textContent).toBe("/records?status=pending&needs_review=true");
     expect(requested().get("needs_review")).toBe("true");
-    expect(screen.getByRole("button", { name: /דורשות בדיקה/ }).getAttribute("aria-pressed")).toBe("true");
+    expect(counts.getByRole("button", { name: /דורשות בדיקה/ }).getAttribute("aria-pressed")).toBe("true");
+    expect(counts.getByRole("button", { name: /הכול/ }).getAttribute("aria-pressed")).toBe("false");
+  });
+
+  test("the 'all' tab counts every record and takes the status filter off", async () => {
+    serve(list([summary()]));
+    renderAt("/records?status=approved&sender=מכבי");
+
+    const all = within(await screen.findByRole("group", { name: "מונים" })).getByRole("button", { name: /הכול/ });
+    expect(all.textContent).toContain("10"); // 7 pending + 3 approved
+    expect(all.getAttribute("aria-pressed")).toBe("false");
+    await userEvent.setup().click(all);
+
+    expect(screen.getByTestId("where").textContent).toBe("/records?sender=%D7%9E%D7%9B%D7%91%D7%99");
+  });
+
+  test("the filters in use show as chips: one takes itself off, the last button all of them", async () => {
+    serve(list([summary()]));
+    renderAt("/records?status=pending&needs_review=true&sender=מכבי&sort=-last_name&page=2");
+    const user = userEvent.setup();
+
+    const active = within(await screen.findByRole("group", { name: "סינון פעיל" }));
+    expect(active.getAllByRole("button").map((b) => b.getAttribute("aria-label") ?? b.textContent)).toEqual([
+      "הסרת הסינון דורשות בדיקה",
+      "הסרת הסינון גורם שולח: מכבי",
+      "ניקוי הכול",
+    ]);
+    await user.click(active.getByRole("button", { name: "הסרת הסינון גורם שולח: מכבי" }));
+    expect(screen.getByTestId("where").textContent).toBe("/records?status=pending&needs_review=true&sort=-last_name");
+
+    await user.click(screen.getByRole("button", { name: "ניקוי הכול" }));
+    expect(screen.getByTestId("where").textContent).toBe("/records?sort=-last_name"); // the order stays
+    expect(screen.queryByRole("group", { name: "סינון פעיל" })).toBeNull();
+  });
+
+  test("a sender shows as a tag in its own color", async () => {
+    serve(list([summary(), summary({ record_id: "r2", sender: null })]));
+    renderAt("/records");
+
+    const [, first, second] = await screen.findAllByRole("row");
+    const tag = within(first).getByText("מכבי");
+    expect(tag.className).toBe(`records-sender is-tag-${senderTag("מכבי")}`);
+    expect(within(second).getAllByRole("cell")[4].textContent).toBe("—");
   });
 
   test("pages through the list", async () => {
@@ -151,6 +195,27 @@ describe("RecordsPage", () => {
     expect(await screen.findByText("אין רשומות לפי הסינון הנוכחי.")).toBeTruthy();
     await userEvent.setup().click(screen.getByRole("button", { name: "ניקוי הסינון" }));
     expect(screen.getByTestId("where").textContent).toBe("/records");
+  });
+
+  test("export downloads every record under the current filters, not one page", async () => {
+    serve(list([summary()], { total: 120 }));
+    renderAt("/records?status=approved&page=2");
+
+    const csv = await screen.findByRole("link", { name: "CSV" });
+    expect(screen.getByText("ייצוא 120 רשומות:")).toBeTruthy();
+    expect(csv.getAttribute("href")).toBe("/api/v1/records/export?status=approved&format=csv");
+    expect(csv.hasAttribute("download")).toBe(true);
+    expect(screen.getByRole("link", { name: "JSON" }).getAttribute("href")).toBe(
+      "/api/v1/records/export?status=approved&format=json",
+    );
+  });
+
+  test("with nothing to export, there is no link and it says why", async () => {
+    serve(list([]));
+    renderAt("/records?sender=מכבי");
+
+    expect(await screen.findByText("אין רשומות לייצוא לפי הסינון הנוכחי")).toBeTruthy();
+    expect(screen.queryByRole("link", { name: "CSV" })).toBeNull();
   });
 
   test("a failed load says so and can try again", async () => {
@@ -200,12 +265,22 @@ describe("RecordsFilters", () => {
     await user.selectOptions(screen.getByLabelText("סוג טופס"), "lab_report");
     await user.selectOptions(screen.getByLabelText("סטטוס"), "approved");
     await user.type(screen.getByLabelText("מתאריך קבלה"), "2026-10-01");
+    await user.type(screen.getByLabelText("עד תאריך קבלה"), "2026-10-19");
 
     expect(Object.fromEntries(requested())).toMatchObject({
       form_type: "lab_report",
       status: "approved",
       date_from: "2026-10-01",
+      date_to: "2026-10-19",
     });
+  });
+
+  test("the filters have no 'needs review only' box; the summary button does that", async () => {
+    serve(list([summary()]));
+    renderAt("/records");
+
+    expect(screen.queryByRole("checkbox")).toBeNull();
+    expect(screen.getByRole("group", { name: "תאריך קבלה" }).nextElementSibling).toBeNull();
   });
 
   test("clearing the filters empties the search box too", async () => {
@@ -215,5 +290,50 @@ describe("RecordsFilters", () => {
     await userEvent.setup().click(await screen.findByRole("button", { name: "ניקוי הסינון" }));
 
     expect((screen.getByRole("searchbox") as HTMLInputElement).value).toBe("");
+  });
+});
+
+describe("sorting", () => {
+  test("a header sorts by its column, and a second click turns it around", async () => {
+    serve(list([summary()]));
+    renderAt("/records?status=pending&page=2");
+    const user = userEvent.setup();
+
+    const date = await screen.findByRole("columnheader", { name: /תאריך קבלה/ });
+    expect(date.getAttribute("aria-sort")).toBe("none");
+    await user.click(within(date).getByRole("button"));
+
+    expect(screen.getByTestId("where").textContent).toBe("/records?status=pending&sort=-received_date");
+    expect(requested().get("sort")).toBe("-received_date");
+    expect(screen.getByRole("columnheader", { name: /תאריך קבלה/ }).getAttribute("aria-sort")).toBe("descending");
+
+    await user.click(within(screen.getByRole("columnheader", { name: /תאריך קבלה/ })).getByRole("button"));
+    expect(requested().get("sort")).toBe("received_date");
+  });
+
+  test("the order from the URL is shown on its column", async () => {
+    serve(list([summary()]));
+    renderAt("/records?sort=-last_name");
+
+    const name = await screen.findByRole("columnheader", { name: /שם/ });
+    expect(name.getAttribute("aria-sort")).toBe("descending");
+    expect(requested().get("sort")).toBe("-last_name");
+  });
+
+  test("every cell carries its column's title, for the narrow-screen cards", async () => {
+    serve(list([summary()]));
+    renderAt("/records");
+
+    const headers = (await screen.findAllByRole("columnheader")).map((th) => th.textContent?.replace(/[▲▼]/g, ""));
+    const cells = within(screen.getAllByRole("row")[1]).getAllByRole("cell");
+    expect(cells.map((td) => td.getAttribute("data-label"))).toEqual(headers);
+  });
+
+  test("central numbers are a list, with nothing to sort by", async () => {
+    serve(list([summary()]));
+    renderAt("/records");
+
+    const centrals = await screen.findByRole("columnheader", { name: "מספרים מרכזיים" });
+    expect(within(centrals).queryByRole("button")).toBeNull();
   });
 });

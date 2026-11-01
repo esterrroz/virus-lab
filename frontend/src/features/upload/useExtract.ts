@@ -1,14 +1,23 @@
 // Sends files to /extract one at a time and tracks each file (PLAN-DEV-B 3, upload table).
+// The server answers 202 once it has the file and reads it in the background; the
+// page then asks for the job until it is over.
 // Owner: A
 
 import { useEffect, useReducer, useRef } from "react";
 import type { components } from "../../api/schema";
 
 export type ExtractResponse = components["schemas"]["ExtractResponse"];
+export type ExtractJob = components["schemas"]["ExtractJob"];
 type Problem = components["schemas"]["Problem"];
 
 // Relative, so the session cookie goes with it (#15).
 export const EXTRACT_URL = "/api/v1/extract";
+// The job reading a file that was sent: how far it got, then its answer.
+export const jobUrl = (jobId: string) => `/api/v1/extract/jobs/${jobId}`;
+export const POLL_MS = 1500;
+// Asks in a row with no answer (about 30 seconds offline) before the file counts as
+// interrupted. The server goes on reading it either way.
+export const MAX_MISSED_POLLS = 20;
 
 const ACCEPTED = /\.(pdf|jpe?g|png)$/i;
 // MAX_FILE_MB in backend/app/settings.py (decimal MB, like the server).
@@ -30,9 +39,13 @@ export interface UploadItem {
   message?: string;
   canRetry: boolean;
   result?: ExtractResponse;
-  // Date.now() when the request went out. The server answers only at the end of
-  // the file, so the panel shows the time that passed instead of a percentage.
-  startedAt?: number;
+  // From the job while it runs. total is 0 until the file is split.
+  progress?: Progress;
+}
+
+export interface Progress {
+  done: number;
+  total: number;
 }
 
 // What one request for one file ended with. Sending again is offered only when
@@ -53,8 +66,8 @@ export const NOT_SENT_CONNECTION = "ההעלאה נעצרה כי החיבור נ
 export const SIGNED_OUT = "צריך להתחבר מחדש, ואז לשלוח שוב";
 
 // Problem types where the server says nothing was saved and sending again may work.
-// database_unavailable is a 503 sent before any page is read.
-const RETRYABLE = new Set(["invalid_upload", "database_unavailable"]);
+// database_unavailable and too_many_uploads are 503s sent before any page is read.
+const RETRYABLE = new Set(["invalid_upload", "database_unavailable", "too_many_uploads"]);
 
 export function classify(status: number, body: unknown): Outcome {
   if (status === 200) {
@@ -85,7 +98,42 @@ export function classify(status: number, body: unknown): Outcome {
   return { kind: "failed", message: parts.join(". "), canRetry: RETRYABLE.has(problem.type ?? "") };
 }
 
-export async function sendFile(file: File, fetchImpl: typeof fetch = fetch): Promise<Outcome> {
+// "8 of 26 pages read", once the server knows how many pages the file has.
+// A one-page file shows only "נקרא…": "0 of 1" says nothing.
+export function progressText(progress: Progress | undefined): string | null {
+  if (!progress || progress.total < 2) return null;
+  return `נקראו ${progress.done} מתוך ${progress.total} עמודים`;
+}
+
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+function asJob(body: unknown): ExtractJob | null {
+  const job = body as Partial<ExtractJob> | null;
+  return job && typeof job.job_id === "string" && typeof job.status === "string" &&
+    typeof job.done === "number" && typeof job.total === "number"
+    ? (job as ExtractJob)
+    : null;
+}
+
+// Classifies, and turns a body of the wrong shape (a proxy's or a login page's
+// answer) into interrupted: pages may have been saved.
+function safeClassify(status: number, body: unknown): Outcome {
+  try {
+    return classify(status, body);
+  } catch {
+    return { kind: "interrupted" };
+  }
+}
+
+export interface SendOptions {
+  fetchImpl?: typeof fetch;
+  // Each count the job reports while it runs.
+  onProgress?: (progress: Progress) => void;
+  wait?: (ms: number) => Promise<void>;
+}
+
+export async function sendFile(file: File, options: SendOptions = {}): Promise<Outcome> {
+  const { fetchImpl = fetch, onProgress, wait = sleep } = options;
   const body = new FormData();
   body.append("files", file);
   let response: Response;
@@ -100,18 +148,51 @@ export async function sendFile(file: File, fetchImpl: typeof fetch = fetch): Pro
   } catch {
     if (response.ok) return { kind: "interrupted" };
   }
-  try {
-    return classify(response.status, json);
-  } catch {
-    // A 200 that is JSON but not an ExtractResponse (a proxy's or a login page's
-    // answer). Pages may have been saved, so the same as a dropped connection.
-    return { kind: "interrupted" };
+  if (response.status !== 202) return safeClassify(response.status, json);
+  const job = asJob(json);
+  return job ? followJob(job, fetchImpl, wait, onProgress) : { kind: "interrupted" };
+}
+
+// Asks for the job every POLL_MS until it is over. The file is on the server by
+// now: whatever happens here, nothing is sent again.
+async function followJob(
+  first: ExtractJob,
+  fetchImpl: typeof fetch,
+  wait: (ms: number) => Promise<void>,
+  onProgress?: (progress: Progress) => void,
+): Promise<Outcome> {
+  let job = first;
+  let missed = 0;
+  for (;;) {
+    if (job.status === "done") return job.result ? safeClassify(200, job.result) : { kind: "interrupted" };
+    if (job.status === "failed") {
+      return job.problem ? safeClassify(job.problem.status, job.problem) : { kind: "interrupted" };
+    }
+    onProgress?.({ done: job.done, total: job.total });
+    await wait(POLL_MS);
+    let next: ExtractJob | null = null;
+    try {
+      const response = await fetchImpl(jobUrl(job.job_id));
+      // 404: the server restarted and forgot the job. 401: the session ended. Either
+      // way the answer is lost, and the forms read so far are saved.
+      if (response.status === 404 || response.status === 401) return { kind: "interrupted" };
+      if (response.ok) next = asJob(await response.json());
+    } catch {
+      // Offline for a moment: ask again.
+    }
+    if (next) {
+      job = next;
+      missed = 0;
+    } else if (++missed >= MAX_MISSED_POLLS) {
+      return { kind: "interrupted" };
+    }
   }
 }
 
 export type Action =
   | { type: "add"; files: { key: string; file: File }[] }
-  | { type: "start"; key: string; at: number }
+  | { type: "start"; key: string }
+  | { type: "progress"; key: string; progress: Progress }
   | { type: "finish"; key: string; outcome: Outcome }
   | { type: "retry"; key: string };
 
@@ -140,7 +221,14 @@ export function uploadReducer(items: UploadItem[], action: Action): UploadItem[]
       ];
     case "start":
       return items.map((i) =>
-        i.key === action.key ? { ...i, status: "sending", message: undefined, startedAt: action.at } : i,
+        i.key === action.key
+          ? { ...i, status: "sending", message: undefined, progress: undefined }
+          : i,
+      );
+    case "progress":
+      // A late answer for a file already finished is dropped.
+      return items.map((i) =>
+        i.key === action.key && i.status === "sending" ? { ...i, progress: action.progress } : i,
       );
     case "retry":
       return items.map((i) =>
@@ -186,6 +274,12 @@ function finish(items: UploadItem[], key: string, outcome: Outcome): UploadItem[
   });
 }
 
+// Files still waiting or being sent. Closing or reloading the page now would drop
+// the ones waiting without a word: only the file already sent is finished by the server.
+export function hasUnsentFiles(items: UploadItem[]): boolean {
+  return items.some((i) => i.status === "queued" || i.status === "sending");
+}
+
 // Every 200 answer goes to onResult as soon as it arrives, so the review table
 // fills in while the other files are still being read.
 export function useExtract(onResult: (result: ExtractResponse) => void) {
@@ -202,13 +296,26 @@ export function useExtract(onResult: (result: ExtractResponse) => void) {
     const next = items.find((i) => i.status === "queued");
     if (!next) return;
     sending.current = true;
-    dispatch({ type: "start", key: next.key, at: Date.now() });
-    void sendFile(next.file).then((outcome) => {
+    dispatch({ type: "start", key: next.key });
+    const onProgress = (progress: Progress) => dispatch({ type: "progress", key: next.key, progress });
+    void sendFile(next.file, { onProgress }).then((outcome) => {
       sending.current = false;
       dispatch({ type: "finish", key: next.key, outcome });
       if ("result" in outcome && outcome.result) onResultRef.current(outcome.result);
     });
   }, [items]);
+
+  // The browser's own "leave this page?" dialog, only while there is something to lose.
+  const busy = hasUnsentFiles(items);
+  useEffect(() => {
+    if (!busy) return;
+    const warn = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = ""; // older browsers show the dialog only when this is set
+    };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [busy]);
 
   return {
     items,

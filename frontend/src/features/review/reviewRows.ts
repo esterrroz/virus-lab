@@ -6,7 +6,7 @@ import type { components } from "../../api/schema";
 
 type ApiRecord = components["schemas"]["Record"];
 type FormField = components["schemas"]["FormField"];
-type FieldName = keyof components["schemas"]["RecordFields"];
+export type FieldName = keyof components["schemas"]["RecordFields"];
 
 // Records from /extract join the table as each file's answer arrives. A record
 // that is already there (same record_id) is replaced in place, so a newer copy
@@ -16,6 +16,13 @@ export function mergeRecords(current: ApiRecord[], incoming: ApiRecord[]): ApiRe
   const merged = current.map((r) => byId.get(r.record_id) ?? r);
   const known = new Set(current.map((r) => r.record_id));
   return [...merged, ...incoming.filter((r) => !known.has(r.record_id))];
+}
+
+// After a change the server sends the record and its siblings back. Only rows
+// already in the table are replaced: a sibling from an earlier upload stays out.
+export function replaceRecords(current: ApiRecord[], incoming: ApiRecord[]): ApiRecord[] {
+  const byId = new Map(incoming.map((r) => [r.record_id, r]));
+  return current.map((r) => byId.get(r.record_id) ?? r);
 }
 
 export function findRecord(records: ApiRecord[], id: string | null): ApiRecord | null {
@@ -80,6 +87,70 @@ export const FIELD_COLUMNS: { name: FieldName; title: string }[] = [
   { name: "received_date", title: "תאריך קבלה" },
 ];
 
+/**
+ * The fields that still block approval, named as the server names them in
+ * blocking_fields (rules/records.py): a flagged field, or "central_numbers[i]".
+ * An issue on the whole record shows but doesn't block (#59).
+ */
+export function blockingFields(record: ApiRecord): string[] {
+  const names = FIELD_COLUMNS.filter((c) => record.fields[c.name].needs_review).map((c) => c.name as string);
+  record.central_numbers.forEach((item, i) => {
+    if (item.needs_review) names.push(`central_numbers[${i}]`);
+  });
+  return names;
+}
+
+/** Pending, with nothing left to fix: "approve all ready" sends these. */
+export function isReady(record: ApiRecord): boolean {
+  return record.status === "pending" && blockingFields(record).length === 0;
+}
+
+/** The next pending record with a field to fix, after this one and around: "הבאה לתיקון". */
+export function nextToFix(records: ApiRecord[], currentId: string): ApiRecord | null {
+  const start = records.findIndex((r) => r.record_id === currentId);
+  for (let step = 1; step <= records.length; step++) {
+    const r = records[(start + step) % records.length];
+    if (r.record_id !== currentId && r.status === "pending" && blockingFields(r).length > 0) return r;
+  }
+  return null;
+}
+
+/**
+ * Where to go after approving or deleting a record: the next one to fix, else the
+ * next one still pending, else none (the current one stays open).
+ */
+export function nextAfter(records: ApiRecord[], currentId: string): ApiRecord | null {
+  const toFix = nextToFix(records, currentId);
+  if (toFix) return toFix;
+  const start = records.findIndex((r) => r.record_id === currentId);
+  for (let step = 1; step < records.length; step++) {
+    const r = records[(start + step) % records.length];
+    if (r.status === "pending") return r;
+  }
+  return null;
+}
+
+/** A blocking field's name in Hebrew: "national_id" → ת״ז, "central_numbers[1]" → מספר מרכזי 2. */
+export function fieldTitle(name: string): string {
+  const central = /^central_numbers\[(\d+)\]$/.exec(name);
+  if (central) return `מספר מרכזי ${Number(central[1]) + 1}`;
+  return FIELD_COLUMNS.find((c) => c.name === name)?.title ?? name;
+}
+
+/** Why "approve all ready" skipped a record, for its row. */
+export function skipReason(skipped: components["schemas"]["SkippedRecord"]): string {
+  switch (skipped.type) {
+    case "review_required":
+      return `לא אושרה: יש לטפל ב${(skipped.blocking_fields ?? []).map(fieldTitle).join(", ")}`;
+    case "version_conflict":
+      return "לא אושרה: עודכנה בינתיים בחלון אחר";
+    case "record_approved":
+      return "כבר אושרה";
+    case "not_found":
+      return "לא אושרה: נמחקה בינתיים";
+  }
+}
+
 export const FORM_TYPE_TEXT: Record<ApiRecord["form_type"], string> = {
   hmo_form: "טופס קופה",
   hospital_form: "טופס בית חולים",
@@ -89,8 +160,3 @@ export const FORM_TYPE_TEXT: Record<ApiRecord["form_type"], string> = {
   government: "גוף ממשלתי",
   unknown: "לא ידוע",
 };
-
-export function statusText(record: ApiRecord): string {
-  if (record.status === "approved") return "אושר";
-  return record.needs_review ? "דורש בדיקה" : "מוכן לאישור";
-}

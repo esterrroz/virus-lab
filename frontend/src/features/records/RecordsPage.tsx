@@ -1,14 +1,26 @@
 // The records screen (PLAN-DEV-B 3.1): counts, search and filters, the list and
-// paging, all driven by the filters in the URL.
+// paging, all driven by the filters in the URL. On a wide screen it fits the
+// window and only the list scrolls, under its own header.
 // Owner: B
 
 import { useCallback } from "react";
 import { useSearchParams } from "react-router";
 import type { components } from "../../api/schema";
-import { NO_FILTERS, PAGE_SIZE, hasFilters, parseFilters, toParams, withChange, type RecordFilters } from "./filters";
+import { ExportButton } from "./ExportButton";
+import {
+  NO_FILTERS,
+  PAGE_SIZE,
+  filterChips,
+  hasFilters,
+  parseFilters,
+  toParams,
+  withChange,
+  type RecordFilters,
+} from "./filters";
 import { RecordsFilters } from "./RecordsFilters";
 import { RecordsTable } from "./RecordsTable";
 import { useRecordsQuery } from "./useRecordsQuery";
+import { Skeleton } from "../../shared/ui/Skeleton";
 import "./RecordsPage.css";
 
 type RecordCounts = components["schemas"]["RecordCounts"];
@@ -28,11 +40,17 @@ export function RecordsPage() {
 
   return (
     <section className="records" aria-labelledby="records-title" aria-busy={query.status === "loading"}>
-      <h1 id="records-title" className="records-title">
-        רשומות
-      </h1>
-      {data && <Counts counts={data.counts} filters={filters} onPick={change} />}
-      <RecordsFilters filters={filters} onChange={change} />
+      <div className="records-head">
+        <h1 id="records-title" className="records-title">
+          רשומות
+        </h1>
+        {data && <Counts counts={data.counts} filters={filters} onPick={change} />}
+      </div>
+      <div className="records-toolbar">
+        <RecordsFilters filters={filters} onChange={change} />
+        <ActiveFilters filters={filters} onChange={change} />
+        {data && <ExportButton filters={filters} total={data.total} />}
+      </div>
       {query.status === "error" && (
         <div className="records-banner" role="alert">
           ⚠ {query.message}
@@ -41,7 +59,11 @@ export function RecordsPage() {
           </button>
         </div>
       )}
-      {!data && query.status === "loading" && <p className="records-empty">טוען…</p>}
+      {!data && query.status === "loading" && (
+        <div className="records-card">
+          <Skeleton rows={10} label="טוען רשומות…" />
+        </div>
+      )}
       {data && data.items.length === 0 && (
         <div className="records-empty">
           {hasFilters(filters) ? (
@@ -57,10 +79,10 @@ export function RecordsPage() {
         </div>
       )}
       {data && data.items.length > 0 && (
-        <>
-          <RecordsTable items={data.items} />
+        <div className="records-card">
+          <RecordsTable items={data.items} sort={filters.sort} onSort={(sort) => change({ sort })} />
           <Pagination total={data.total} page={filters.page} onPage={(page) => change({ page })} />
-        </>
+        </div>
       )}
     </section>
   );
@@ -75,19 +97,77 @@ function Counts({
   filters: RecordFilters;
   onPick: (patch: Partial<RecordFilters>) => void;
 }) {
+  const all = filters.status === null && !filters.needsReview;
   const pending = filters.status === "pending" && !filters.needsReview;
   const review = filters.needsReview;
   const approved = filters.status === "approved";
+  // One row of tabs; the pressed one fills with its status color.
   return (
     <div className="records-counts" role="group" aria-label="מונים">
-      <button type="button" aria-pressed={pending} onClick={() => onPick({ status: "pending", needsReview: false })}>
-        ממתינות <strong>{counts.pending}</strong>
+      <button
+        type="button"
+        className="records-count is-all"
+        aria-pressed={all}
+        onClick={() => onPick({ status: null, needsReview: false })}
+      >
+        הכול <strong>{counts.pending + counts.approved}</strong>
       </button>
-      <button type="button" aria-pressed={review} onClick={() => onPick({ status: "pending", needsReview: true })}>
+      <button
+        type="button"
+        className="records-count is-pending"
+        aria-pressed={pending}
+        onClick={() => onPick({ status: "pending", needsReview: false })}
+      >
+        <span className="records-count-dot" aria-hidden="true" /> ממתינות <strong>{counts.pending}</strong>
+      </button>
+      <button
+        type="button"
+        className="records-count is-review"
+        aria-pressed={review}
+        onClick={() => onPick({ status: "pending", needsReview: true })}
+      >
         <span aria-hidden="true">⚠</span> דורשות בדיקה <strong>{counts.needs_review}</strong>
       </button>
-      <button type="button" aria-pressed={approved} onClick={() => onPick({ status: "approved", needsReview: false })}>
+      <button
+        type="button"
+        className="records-count is-approved"
+        aria-pressed={approved}
+        onClick={() => onPick({ status: "approved", needsReview: false })}
+      >
         <span aria-hidden="true">✓</span> מאושרות <strong>{counts.approved}</strong>
+      </button>
+    </div>
+  );
+}
+
+/** The filters in use as chips; each × takes one off, and one button takes them all. */
+function ActiveFilters({
+  filters,
+  onChange,
+}: {
+  filters: RecordFilters;
+  onChange: (patch: Partial<RecordFilters>) => void;
+}) {
+  const chips = filterChips(filters);
+  if (chips.length === 0) return null;
+  return (
+    <div className="records-active" role="group" aria-label="סינון פעיל">
+      <span className="records-active-label">מסוננות לפי:</span>
+      {chips.map((chip) => (
+        <button
+          key={chip.key}
+          type="button"
+          className={`records-chip${chip.tone ? ` is-${chip.tone}` : ""}`}
+          aria-label={`הסרת הסינון ${chip.label}`}
+          onClick={() => onChange(chip.clear)}
+        >
+          {chip.label}
+          <span aria-hidden="true">×</span>
+        </button>
+      ))}
+      {/* The order is not a filter: it stays. */}
+      <button type="button" className="records-active-clear" onClick={() => onChange({ ...NO_FILTERS, sort: filters.sort })}>
+        ניקוי הכול
       </button>
     </div>
   );

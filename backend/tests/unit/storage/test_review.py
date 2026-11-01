@@ -3,12 +3,20 @@
 
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
+from typing import get_args
 
 import pytest
 
 from app.extraction.provider import PageImage
 from app.rules.engine import apply_rules
-from app.schemas.api import ApproveRequest, BulkApproveItem, Form, RecordPatch, User
+from app.schemas.api import (
+    ApproveRequest,
+    BulkApproveItem,
+    Form,
+    RecordPatch,
+    RecordSort,
+    User,
+)
 from app.storage import repo, review
 from app.storage.review import RecordProblem
 from app.storage.service import save_extracted_page
@@ -140,6 +148,41 @@ def test_list_pages_keep_the_total(db):
     assert (page.items, page.total) == ([], 2)
 
 
+def test_list_sorts_by_a_column_with_empty_values_last(db):
+    save(db, "clean", file_id="f1", now=NOW)
+    save(db, "multi_values", file_id="f2", now=NOW + timedelta(minutes=1))
+    save(db, "no_commitment", file_id="f3", now=NOW + timedelta(minutes=2))
+
+    def numbers(sort):
+        return [r.commitment_number for r in call(db, review.list_records, sort=sort).items]
+
+    ascending, descending = numbers("commitment_number"), numbers("-commitment_number")
+    present = [n for n in ascending if n is not None]
+    assert present == sorted(present)
+    assert ascending[-1] is None and descending[-1] is None  # empty last, either way
+    assert [n for n in descending if n is not None] == sorted(present, reverse=True)
+
+
+def test_list_sort_ties_keep_the_default_order_so_pages_are_stable(db):
+    save(db, "clean", file_id="f1", now=NOW)
+    save(db, "multi_values", file_id="f2", now=NOW + timedelta(minutes=1))
+    everything = [r.record_id for r in call(db, review.list_records, sort="form_type").items]
+    pages = [
+        r.record_id
+        for offset in range(len(everything))
+        for r in call(db, review.list_records, sort="form_type", limit=1, offset=offset).items
+    ]
+    assert pages == everything
+    # Every record has the same form type, so the default order (newest first) decides.
+    assert everything == [r.record_id for r in call(db, review.list_records).items]
+
+
+def test_every_sort_key_runs(db):
+    save(db, "clean")
+    for sort in get_args(RecordSort):
+        assert call(db, review.list_records, sort=sort).total == 1
+
+
 # --- Patch
 
 
@@ -152,7 +195,7 @@ def test_a_correction_reruns_the_rules_and_keeps_raw(db):
     assert field.raw == record.fields.national_id.raw
     assert (field.corrected, field.confirmed, field.needs_review) == (True, False, False)
     assert response.record.version == record.version + 1
-    assert response.record.updated_by == "dana"
+    assert response.record.updated_by == "דנה"
     assert response.siblings == []  # one record in this form
 
 
@@ -252,13 +295,69 @@ def test_a_duplicate_stays_flagged_across_edits_until_confirmed(db):
     assert not confirmed.fields.commitment_number.needs_review
 
 
-def test_changing_to_a_number_another_record_has_flags_it(db):
-    [taken] = save(db, "clean", file_id="f1")
-    [record] = save(db, "no_commitment", file_id="f2")
+def test_the_flag_goes_once_the_other_record_is_deleted(db):
+    [first] = save(db, "clean", file_id="f1")
+    [duplicate] = save(db, "clean", file_id="f2")
+    call(db, review.delete_record, first.record_id)
+
+    approved = approve(db, duplicate)
+    assert approved.status == "approved"
+    assert not approved.fields.commitment_number.issues
+
+
+def test_the_record_saved_first_is_not_flagged_by_a_later_copy(db):
+    [first] = save(db, "clean", file_id="f1")
+    save(db, "clean", file_id="f2")
+
+    edited = patch(db, first, fields={"first_name": {"value": "רות"}}).record
+    assert not edited.fields.commitment_number.issues
+    assert approve(db, edited).status == "approved"
+
+
+def test_changing_only_the_number_to_one_another_record_has_does_not_flag(db):
+    [taken] = save(db, "clean", file_id="f1")  # central 948062
+    [record] = save(db, "no_commitment", file_id="f2")  # central 948070
     number = taken.fields.commitment_number.value
 
     edited = patch(db, record, fields={"commitment_number": {"value": number}}).record
-    assert [i.code for i in edited.fields.commitment_number.issues] == ["DUPLICATE_RECORD"]
+    assert not edited.fields.commitment_number.issues
+
+
+def test_changing_the_central_numbers_to_match_flags_it(db):
+    [taken] = save(db, "clean", file_id="f1")
+    [record] = save(db, "no_commitment", file_id="f2")
+    number = taken.fields.commitment_number.value
+    record = patch(db, record, fields={"commitment_number": {"value": number}}).record
+
+    edited = patch(db, record, central_numbers=[{"idx": 0, "value": "948062"}]).record
+
+    [issue] = edited.fields.commitment_number.issues
+    assert issue.code == "DUPLICATE_RECORD"
+    assert [d.record_id for d in issue.duplicate_of] == [taken.record_id]
+    assert edited.needs_review
+
+
+def test_changing_the_central_numbers_away_clears_the_flag(db):
+    save(db, "clean", file_id="f1")
+    [duplicate] = save(db, "clean", file_id="f2")
+
+    edited = patch(db, duplicate, central_numbers=[{"idx": 0, "value": "948070"}]).record
+
+    assert not edited.fields.commitment_number.issues
+    assert approve(db, edited).status == "approved"
+
+
+def test_every_earlier_copy_is_named_oldest_first(db):
+    later = datetime(2026, 10, 20, 9, 0, tzinfo=UTC)
+    [first] = save(db, "clean", file_id="f1", now=later)
+    [older] = save(db, "clean", file_id="f2", now=NOW)
+    [record] = save(db, "clean", file_id="f3")
+
+    [issue] = record.fields.commitment_number.issues
+    assert [(d.record_id, d.created_at, d.created_by) for d in issue.duplicate_of] == [
+        (older.record_id, NOW, "דנה"),
+        (first.record_id, later, "דנה"),
+    ]
 
 
 # --- Approve
@@ -278,7 +377,7 @@ def test_approve_after_confirming_the_empty_field(db):
     approved = approve(db, confirmed)
 
     assert approved.status == "approved"
-    assert (approved.approved_by, approved.approved_at) == ("dana", NOW)
+    assert (approved.approved_by, approved.approved_at) == ("דנה", NOW)
 
 
 def test_approve_many_approves_the_ready_and_skips_the_rest(db):
@@ -353,6 +452,15 @@ def test_export_takes_the_list_filters_and_no_status_means_every_record(db):
     assert export(db, form_type="lab_report") == []
 
 
+def test_export_is_in_the_lists_sort_order(db):
+    save(db, "clean", file_id="f1", now=NOW)
+    save(db, "multi_values", file_id="f2", now=NOW + timedelta(minutes=1))
+    save(db, "no_commitment", file_id="f3", now=NOW + timedelta(minutes=2))
+
+    listed = [r.record_id for r in call(db, review.list_records, sort="commitment_number").items]
+    assert [r.record_id for r in export(db, sort="commitment_number")] == listed
+
+
 def test_every_export_is_logged_without_values(db):
     save(db, "multi_values")
     export(db, "csv")
@@ -371,3 +479,60 @@ def test_too_many_records_is_refused_and_not_logged(db, monkeypatch):
     refused = problem(db, review.export_records, USER, export_format="csv", now=NOW)
     assert (refused.status, refused.type) == (422, "export_too_large")
     assert export_log(db) == []
+
+
+# --- The overview screen
+
+
+def test_stats_with_no_records_are_zero(db):
+    stats = call(db, review.get_stats)
+    assert stats.model_dump() == {
+        "pending": 0,
+        "approved": 0,
+        "needs_review": 0,
+        "fields_total": 0,
+        "fields_flagged": 0,
+        "corrections": 0,
+        "corrected_records": 0,
+        "by_field": [],
+    }
+
+
+def test_stats_count_pending_fields_and_corrections_per_field(db):
+    [clean] = save(db, "clean", file_id="f1")
+    first, _ = save(db, "multi_values", file_id="f2")
+    [unclear] = save(db, "unclear", file_id="f3")
+    approve(db, clean)
+    # A shared field: logged on both records of the form, counted once.
+    first = patch(db, first, fields={"last_name": {"value": "כהן"}}).record
+    patch(db, first, central_numbers=[{"idx": 0}, {"value": "123456"}])
+    unclear = patch(db, unclear, fields={"national_id": {"value": "11223344"}}).record
+    again = RecordPatch.model_validate(
+        {"version": unclear.version, "fields": {"national_id": {"value": "22334455"}}}
+    )
+    later = NOW + timedelta(minutes=1)
+    call(db, review.patch_record, unclear.record_id, again, USER, today=TODAY, now=later)
+
+    stats = call(db, review.get_stats)
+
+    pending = [r for r in call(db, review.list_records).items if r.status == "pending"]
+    records = [call(db, review.get_record, r.record_id) for r in pending]
+    flags = [
+        field.needs_review
+        for r in records
+        for field in [
+            *(getattr(r.fields, name) for name in type(r.fields).model_fields),
+            *r.central_numbers,
+        ]
+    ]
+    assert (stats.pending, stats.approved) == (3, 1)
+    assert stats.needs_review == sum(r.needs_review for r in records)
+    assert stats.fields_total == len(flags) == 3 * 6 + sum(len(r.central_numbers) for r in records)
+    assert stats.fields_flagged == sum(flags) > 0
+    assert [(f.field, f.corrections) for f in stats.by_field] == [
+        ("national_id", 2),
+        ("central_numbers", 1),
+        ("last_name", 1),
+    ]
+    assert stats.corrections == 4
+    assert stats.corrected_records == 3

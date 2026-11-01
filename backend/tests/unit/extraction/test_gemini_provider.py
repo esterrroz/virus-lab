@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 from datetime import UTC, datetime, timedelta
 
@@ -11,10 +12,17 @@ from app.extraction.fake_provider import FIXTURES_DIR
 from app.extraction.gemini_provider import GeminiProvider, load_prompt
 from app.extraction.provider import PageImage, ProviderError, QuotaExhausted
 from app.rules.senders import sender_names
-from app.schemas.extraction import RawExtraction
+from app.schemas.extraction import NameReading, RawExtraction
 
 ANSWER = (FIXTURES_DIR / "03_maccabi_three_centrals.json").read_text(encoding="utf-8")
 PAGE = PageImage("f1", "forms.pdf", 1, 0, b"\xff\xd8 jpeg bytes")
+NAME_ANSWER = json.dumps(
+    {
+        "first_name": {"value": "ישראל", "status": "found", "evidence": "שם פרטי"},
+        "last_name": {"value": "ישראלי", "status": "found", "evidence": "שם משפחה"},
+    }
+)
+CROP = PageImage("f1", "forms.pdf", 1, 0, b"\xff\xd8 the name, enlarged")
 
 
 def api_error(code: int, status: str, *details: dict) -> errors.APIError:
@@ -104,7 +112,12 @@ class Sleeps:
 def provider(clients, sleep=None, **kwargs):
     """One FakeClient, or a list of them: one per key."""
     clients = clients if isinstance(clients, list) else [clients]
-    options = {"max_concurrency": 4, "timeout_s": 60, "prompt": "PROMPT", **kwargs}
+    options = {
+        "max_concurrency": 4,
+        "prompt": "PROMPT",
+        "name_prompt": "NAME PROMPT",
+        **kwargs,
+    }
     return GeminiProvider(clients, "gemini-test", sleep=sleep or Sleeps(), **options)
 
 
@@ -129,6 +142,7 @@ def test_a_page_comes_back_as_raw_extraction():
     assert config.response_schema is RawExtraction
     assert config.response_mime_type == "application/json"
     assert config.thinking_config.thinking_level == types.ThinkingLevel.LOW
+    assert config.media_resolution == types.MediaResolution.MEDIA_RESOLUTION_HIGH
     assert config.automatic_function_calling.disable
 
 
@@ -140,6 +154,10 @@ def test_the_prompt_lists_every_sender_and_drops_its_comment():
     assert not prompt.startswith("<!--")
     assert "Owner" not in prompt  # the file's header comment is not sent to the model
     assert "התקבל" in prompt  # v4: the received stamp wins
+    assert "2825747366-01" in prompt  # v5: what the first measurement found
+    assert "כתב יד רהוט" in prompt  # v7: names in Hebrew cursive
+    assert "crossed out" in prompt  # the handwritten name, not the crossed-out one
+    assert "best reading of the whole name" not in prompt  # an unclear name is null
 
 
 def test_a_used_up_daily_quota_stops_at_once():
@@ -195,41 +213,36 @@ def test_the_keys_wrap_around_so_a_renewed_quota_is_found_again():
     result = run(shared.extract(PAGE))
 
     assert isinstance(result, RawExtraction)
-    assert len(first.calls) == 2 and len(second.calls) == 1
+    assert len(first.calls) == 2  # asked again once its quota is back
 
 
-def test_pages_at_once_each_try_every_key_exactly_once():
-    # Seen in review: the loop read the shared key again on each pass. Page A runs
-    # through keys 1, 2, 3 and wraps the shared key back to 1 while page B, slow on
-    # key 1, is on key 3: B then asked key 1 again and never asked key 2. Now B
-    # skips key 2, which A found used up, and asks key 3 once.
-    # Each call waits for its gate, so the order is set here and not by timers.
+def test_pages_at_once_never_ask_a_key_twice_for_the_same_quota():
+    # Two pages at once, every key out for the day: each key is asked at most once
+    # per page, and a key another page found used up is skipped.
+    clients = [FakeClient(DAILY, delay=0.01) for _ in range(3)]
+    shared = provider(clients, now=Clock(MORNING))
 
-    async def scenario():
-        key1 = [asyncio.Event(), asyncio.Event()]  # A's call, then B's
-        key2 = [asyncio.Event()]  # A's only: B skips it
-        key3 = [asyncio.Event(), asyncio.Event()]  # A's call, then B's
-        clients = [FakeClient(DAILY, gates=gates) for gates in (key1, key2, key3)]
-        shared = provider(clients)
+    async def two_pages():
+        return await asyncio.gather(
+            shared.extract(PAGE), shared.extract(PAGE), return_exceptions=True
+        )
 
-        async def settle():  # let both pages run up to their next gate
-            for _ in range(20):
-                await asyncio.sleep(0)
-
-        page_a = asyncio.create_task(shared.extract(PAGE))
-        await settle()
-        page_b = asyncio.create_task(shared.extract(PAGE))
-        await settle()
-        for gate in (key1[0], key2[0], key1[1], key3[0], key3[1]):
-            gate.set()
-            await settle()
-        results = await asyncio.gather(page_a, page_b, return_exceptions=True)
-        return results, [len(client.calls) for client in clients]
-
-    results, calls = run(scenario())
+    results = run(two_pages())
 
     assert all(isinstance(result, QuotaExhausted) for result in results)
-    assert calls == [2, 1, 2]
+    assert all(len(client.calls) <= 2 for client in clients)
+    assert sum(len(client.calls) for client in clients) <= 6
+
+
+def test_calls_take_the_keys_in_turn():
+    # A long file spreads over every key's per-minute limit, not one key's.
+    clients = [FakeClient(ANSWER) for _ in range(3)]
+    shared = provider(clients)
+
+    for _ in range(6):
+        run(shared.extract(PAGE))
+
+    assert [len(client.calls) for client in clients] == [2, 2, 2]
 
 
 def test_the_log_does_not_promise_a_next_key_that_is_not_there(caplog):
@@ -307,8 +320,8 @@ def test_a_refused_key_is_asked_again_after_an_hour():
     shared = provider([bad, good], now=clock)
     run(shared.extract(PAGE))
 
-    def next_page_from_key_1():  # as if another page had just moved back to key 1
-        shared._current = 0
+    def next_page_from_key_1():  # the next call in turn starts at key 1
+        shared._next = 0
         run(shared.extract(PAGE))
 
     next_page_from_key_1()
@@ -363,13 +376,14 @@ def test_a_key_over_its_minute_and_one_out_for_the_day_fail_the_page_not_the_bat
     assert error.value.message == gemini_provider.RATE_MESSAGE
 
 
-def test_a_short_per_minute_wait_still_stays_on_the_key():
+def test_a_short_per_minute_wait_goes_to_the_next_key_without_waiting():
+    # Waiting would hold one of the few call slots idle while another key is free.
     first, second, sleeps = FakeClient(per_minute("7s"), ANSWER), FakeClient(ANSWER), Sleeps()
 
     run(provider([first, second], sleeps).extract(PAGE))
 
-    assert len(first.calls) == 2 and second.calls == []
-    assert sleeps.waits == [7.0]
+    assert len(first.calls) == 1 and len(second.calls) == 1
+    assert sleeps.waits == []
 
 
 def test_the_log_names_the_key_by_number_only(caplog):
@@ -474,13 +488,12 @@ def test_a_bad_request_or_key_is_not_retried(code, status, message):
     assert len(client.calls) == 1
 
 
-def test_a_slow_answer_times_out_without_a_retry():
-    client = FakeClient(ANSWER, delay=1.0)
+def test_a_slow_answer_is_waited_for():
+    # No time limit: a page that takes long is read, not failed (22.10).
+    client = FakeClient(ANSWER, delay=0.3)
 
-    with pytest.raises(ProviderError) as error:
-        run(provider(client, timeout_s=0.05).extract(PAGE))
+    run(provider(client).extract(PAGE))
 
-    assert error.value.message == gemini_provider.TIMEOUT_MESSAGE
     assert len(client.calls) == 1
 
 
@@ -525,6 +538,58 @@ def test_the_fingerprint_changes_with_the_model_or_the_prompt():
     assert provider(FakeClient(ANSWER)).fingerprint == base  # stable, so the cache hits
     assert provider(FakeClient(ANSWER), prompt="PROMPT v5").fingerprint != base
     other_model = GeminiProvider(
-        [FakeClient(ANSWER)], "gemini-other", max_concurrency=1, timeout_s=60, prompt="PROMPT"
+        [FakeClient(ANSWER)], "gemini-other", max_concurrency=1, prompt="PROMPT"
     )
     assert other_model.fingerprint != base
+
+
+def test_a_crop_comes_back_as_a_name_reading():
+    client = FakeClient(NAME_ANSWER)
+
+    result = run(provider(client).read_name(CROP))
+
+    assert isinstance(result, NameReading)
+    assert (result.first_name.value, result.last_name.value) == ("ישראל", "ישראלי")
+    [call] = client.calls
+    image, prompt = call["contents"]
+    assert image.inline_data.data == CROP.jpeg
+    assert prompt == "NAME PROMPT"
+    config: types.GenerateContentConfig = call["config"]
+    assert config.response_schema is NameReading
+    # The same settings as a page's, so the two reads differ only in what they see.
+    assert config.thinking_config.thinking_level == types.ThinkingLevel.LOW
+    assert config.media_resolution == types.MediaResolution.MEDIA_RESOLUTION_HIGH
+    assert config.automatic_function_calling.disable
+
+
+def test_a_name_read_moves_on_to_the_next_key_like_a_page():
+    out_of_quota, answers = FakeClient(DAILY), FakeClient(NAME_ANSWER)
+
+    result = run(provider([out_of_quota, answers], now=Clock(MORNING)).read_name(CROP))
+
+    assert result.first_name.value == "ישראל"
+    assert (len(out_of_quota.calls), len(answers.calls)) == (1, 1)
+
+
+def test_a_name_answer_that_does_not_fit_is_a_provider_error():
+    with pytest.raises(ProviderError):
+        run(provider(FakeClient('{"first_name": "ישראל"}')).read_name(CROP))
+
+
+def test_the_name_prompt_reads_the_handwriting_and_never_guesses():
+    prompt = load_prompt(gemini_provider.NAME_PROMPT_FILE)
+
+    assert "<!--" not in prompt
+    assert "כתב יד רהוט" in prompt  # Hebrew cursive, like the page prompt
+    assert "crossed out" in prompt  # the handwritten name, not the one under the line
+    assert "Never guess" in prompt
+    assert "upside down" in prompt  # the page read can take an upside-down page as upright
+
+
+def test_the_name_read_has_its_own_fingerprint():
+    base = provider(FakeClient(ANSWER))
+    new_name_prompt = provider(FakeClient(ANSWER), name_prompt="NAME PROMPT v2")
+
+    assert new_name_prompt.name_fingerprint != base.name_fingerprint
+    assert new_name_prompt.fingerprint == base.fingerprint  # pages already read stay cached
+    assert base.name_fingerprint != base.fingerprint

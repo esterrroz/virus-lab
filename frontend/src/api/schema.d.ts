@@ -92,17 +92,38 @@ export interface paths {
         put?: never;
         /**
          * Extract
-         * @description Read every page of every file and save it as pending records.
+         * @description Receive the files and read them in the background: 202 with the job at once.
          *
-         *     A file or page that fails is reported in `files` / `failed_pages`, and the
-         *     others go on. When the daily quota runs out, the answer says whether sending
-         *     the file again is safe:
-         *     - nothing was saved: 503 quota_exhausted, and the file can be sent again;
-         *     - some pages were saved: 200 with quota_exhausted=true and those records.
-         *       Sending the file again would save them twice.
-         *     Otherwise 200, unless the request itself is unusable (4xx).
+         *     GET /extract/jobs/{job_id} tells how far it got, and in the end the saved
+         *     records, or why there are none. Each form is saved as soon as it is read, so
+         *     closing the page after this answer loses nothing.
+         *
+         *     A request that can't be used is refused here, before anything is read (4xx).
          */
         post: operations["extract_api_v1_extract_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/extract/jobs/{job_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Extract Job
+         * @description How far the upload got, and its answer once it is over. Any signed-in user
+         *     may ask, as everyone sees everyone's records. 404 after a server restart, or
+         *     FINISHED_TTL_S after the job ended: some forms may be saved, so the page checks
+         *     the records screen.
+         */
+        get: operations["extract_job_api_v1_extract_jobs__job_id__get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -118,7 +139,8 @@ export interface paths {
         };
         /**
          * List Records
-         * @description Newest first, then page number, then commitment order.
+         * @description In the `sort` order (newest first by default), then page number, then
+         *     commitment order.
          *
          *     `status=approved` is also the hand-off point for the lab's system (D6).
          */
@@ -205,6 +227,26 @@ export interface paths {
         patch: operations["patch_record_api_v1_records__record_id__patch"];
         trace?: never;
     };
+    "/api/v1/records/{record_id}/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get History
+         * @description Who did what to the record and when, oldest first. Never the values (D13).
+         */
+        get: operations["get_history_api_v1_records__record_id__history_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/records/{record_id}/approve": {
         parameters: {
             query?: never;
@@ -219,6 +261,27 @@ export interface paths {
          * @description Rerun the rules; approve only if no field still needs review (D3).
          */
         post: operations["approve_record_api_v1_records__record_id__approve_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/stats": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Stats
+         * @description The overview screen: records left to approve, pending fields still flagged,
+         *     and how often each field was corrected by hand (from the records' history).
+         */
+        get: operations["stats_api_v1_stats_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -296,6 +359,24 @@ export interface components {
             /** Skipped */
             skipped: components["schemas"]["SkippedRecord"][];
         };
+        /**
+         * DuplicateOf
+         * @description An earlier record with the same commitment number and the same central numbers.
+         */
+        DuplicateOf: {
+            /** Record Id */
+            record_id: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Created By
+             * @description Who saved it, by display name.
+             */
+            created_by: string;
+        };
         /** ErrorInfo */
         ErrorInfo: {
             /**
@@ -305,6 +386,33 @@ export interface components {
             code: "EXTRACTION_FAILED" | "INVALID_FILE" | "QUOTA_EXHAUSTED";
             /** Message */
             message: string;
+        };
+        /**
+         * ExtractJob
+         * @description An upload read in the background. Ask again until status is not "running".
+         */
+        ExtractJob: {
+            /** Job Id */
+            job_id: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "running" | "done" | "failed";
+            /**
+             * Done
+             * @description Pages read so far, failed ones included.
+             */
+            done: number;
+            /**
+             * Total
+             * @description Pages in the upload. 0 until the files are split into pages.
+             */
+            total: number;
+            /** @description status "done": the saved records and the pages that failed. */
+            result: components["schemas"]["ExtractResponse"] | null;
+            /** @description status "failed": why, with the status POST /extract would have answered: 413 too_many_pages; 503 quota_exhausted (nothing was saved, so the file can be sent again); 500 extraction_stopped (the job broke or the server stopped: some forms may be saved, check the records before sending again). */
+            problem: components["schemas"]["Problem"] | null;
         };
         /** ExtractResponse */
         ExtractResponse: {
@@ -336,6 +444,39 @@ export interface components {
             /** Page Number */
             page_number: number;
             error: components["schemas"]["ErrorInfo"];
+        };
+        /**
+         * FieldBox
+         * @description Where the model read a value: a rectangle on one page of the form.
+         *
+         *     Edges are in thousandths of the page image as saved (upright, the same image
+         *     /api/v1/pages/{page_id}/image serves), 0 = top / left, 1000 = bottom / right.
+         *     Left is the image's own left: the page is never mirrored for RTL.
+         */
+        FieldBox: {
+            /**
+             * Page Number
+             * @description The page it was read on: the form's first or a continuation page.
+             */
+            page_number: number;
+            /** Top */
+            top: number;
+            /** Left */
+            left: number;
+            /** Bottom */
+            bottom: number;
+            /** Right */
+            right: number;
+        };
+        /** FieldCorrections */
+        FieldCorrections: {
+            /**
+             * Field
+             * @description A RecordFields name, or "central_numbers" for any central number.
+             */
+            field: string;
+            /** Corrections */
+            corrections: number;
         };
         /**
          * FieldEdit
@@ -394,6 +535,7 @@ export interface components {
             corrected: boolean;
             /** Confirmed */
             confirmed: boolean;
+            box?: components["schemas"]["FieldBox"] | null;
         };
         /** HTTPValidationError */
         HTTPValidationError: {
@@ -414,6 +556,11 @@ export interface components {
             severity: "info" | "warning" | "error";
             /** Message */
             message: string;
+            /**
+             * Duplicate Of
+             * @description DUPLICATE_RECORD only: every earlier record that is the same, oldest first.
+             */
+            duplicate_of?: components["schemas"]["DuplicateOf"][] | null;
         };
         /** ListItemEdit */
         ListItemEdit: {
@@ -508,12 +655,12 @@ export interface components {
             approved_at: string | null;
             /**
              * Approved By
-             * @description Username; null until approved.
+             * @description Display name of who approved it; null until approved.
              */
             approved_by?: string | null;
             /**
              * Updated By
-             * @description Username of the last edit; null if never edited.
+             * @description Display name of who last edited it; null if never edited.
              */
             updated_by?: string | null;
         };
@@ -534,6 +681,35 @@ export interface components {
              * @description Pending records with a field still flagged.
              */
             needs_review: number;
+        };
+        /**
+         * RecordEvent
+         * @description One line of a record's history: who did what, to which field, and when.
+         *     Never the values (D13).
+         */
+        RecordEvent: {
+            /**
+             * At
+             * Format: date-time
+             */
+            at: string;
+            /**
+             * Action
+             * @enum {string}
+             */
+            action: "created" | "corrected" | "confirmed" | "approved";
+            /**
+             * Field
+             * @description The field, e.g. "national_id" or "central_numbers[0]"; null for created and approved.
+             */
+            field: string | null;
+            /** Username */
+            username: string;
+            /**
+             * Display Name
+             * @description "לפני הכניסה" for what was saved while the site had no sign-in (21.10-22.10).
+             */
+            display_name: string;
         };
         /** RecordFields */
         RecordFields: {
@@ -587,6 +763,48 @@ export interface components {
              * @description Other records of the same form whose shared fields changed too (A3).
              */
             siblings: components["schemas"]["Record"][];
+        };
+        /**
+         * RecordStats
+         * @description The overview screen: how much work is left and which fields needed a hand.
+         *
+         *     Over every record, with no filters.
+         */
+        RecordStats: {
+            /** Pending */
+            pending: number;
+            /** Approved */
+            approved: number;
+            /**
+             * Needs Review
+             * @description Pending records with a field still flagged.
+             */
+            needs_review: number;
+            /**
+             * Fields Total
+             * @description Fields in pending records, each central number counted on its own.
+             */
+            fields_total: number;
+            /**
+             * Fields Flagged
+             * @description Of fields_total, the ones still flagged.
+             */
+            fields_flagged: number;
+            /**
+             * Corrections
+             * @description Corrections by hand. Changing a field shared by a form's records counts once.
+             */
+            corrections: number;
+            /**
+             * Corrected Records
+             * @description Records with at least one correction.
+             */
+            corrected_records: number;
+            /**
+             * By Field
+             * @description Most corrected first.
+             */
+            by_field: components["schemas"]["FieldCorrections"][];
         };
         /**
          * RecordSummary
@@ -706,6 +924,13 @@ export interface operations {
                         [key: string]: string | boolean | number;
                     };
                 };
+            };
+            /** @description The database is set but does not answer ("database": "unavailable") */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
@@ -842,12 +1067,12 @@ export interface operations {
         };
         responses: {
             /** @description Successful Response */
-            200: {
+            202: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ExtractResponse"];
+                    "application/json": components["schemas"]["ExtractJob"];
                 };
             };
             /** @description No files ("no_files"), more than MAX_FILES_PER_REQUEST ("too_many_files"), or an upload that is cut off or broken ("invalid_upload") */
@@ -877,7 +1102,7 @@ export interface operations {
                     "application/json": components["schemas"]["Problem"];
                 };
             };
-            /** @description Request over MAX_REQUEST_MB ("request_too_large") or over MAX_PAGES_PER_REQUEST ("too_many_pages") */
+            /** @description Request over MAX_REQUEST_MB ("request_too_large"). Too many pages is found only once the files are split: the job ends with "too_many_pages" */
             413: {
                 headers: {
                     [name: string]: unknown;
@@ -895,13 +1120,53 @@ export interface operations {
                     "application/json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The daily Gemini quota ran out before any page was saved ("quota_exhausted"): nothing was saved, so the file can be sent again. Also when the database is not reachable ("database_unavailable") */
+            /** @description The database is not reachable ("database_unavailable"), or too many uploads are being read ("too_many_uploads"). Nothing was read, so the file can be sent again */
             503: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    extract_job_api_v1_extract_jobs__job_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExtractJob"];
+                };
+            };
+            /** @description Unknown or forgotten ("job_not_found") */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -922,6 +1187,8 @@ export interface operations {
                 date_from?: string | null;
                 /** @description received_date, inclusive */
                 date_to?: string | null;
+                /** @description A column, ascending; "-" in front for descending. Empty values last. */
+                sort?: "created_at" | "-created_at" | "received_date" | "-received_date" | "last_name" | "-last_name" | "first_name" | "-first_name" | "national_id" | "-national_id" | "commitment_number" | "-commitment_number" | "sender" | "-sender" | "form_type" | "-form_type" | "status" | "-status";
             };
             header?: never;
             path?: never;
@@ -1015,6 +1282,8 @@ export interface operations {
                 date_from?: string | null;
                 /** @description received_date, inclusive */
                 date_to?: string | null;
+                /** @description A column, ascending; "-" in front for descending. Empty values last. */
+                sort?: "created_at" | "-created_at" | "received_date" | "-received_date" | "last_name" | "-last_name" | "first_name" | "-first_name" | "national_id" | "-national_id" | "commitment_number" | "-commitment_number" | "sender" | "-sender" | "form_type" | "-form_type" | "status" | "-status";
             };
             header?: never;
             path?: never;
@@ -1219,6 +1488,55 @@ export interface operations {
             };
         };
     };
+    get_history_api_v1_records__record_id__history_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                record_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecordEvent"][];
+                };
+            };
+            /** @description No valid session ("unauthenticated") */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No such record */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     approve_record_api_v1_records__record_id__approve_post: {
         parameters: {
             query?: never;
@@ -1277,6 +1595,35 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    stats_api_v1_stats_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecordStats"];
+                };
+            };
+            /** @description No valid session ("unauthenticated") */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
         };

@@ -3,7 +3,7 @@
 // Owner: B
 
 import { useEffect, useState } from "react";
-import { apiFetch } from "../../api/client";
+import { useSenders } from "../../shared/useSenders";
 import { FORM_TYPE_TEXT } from "../review/reviewRows";
 import type { FormType, RecordFilters, RecordStatus } from "./filters";
 
@@ -23,7 +23,7 @@ export function RecordsFilters({ filters, onChange }: Props) {
   return (
     <form className="records-filters" role="search" onSubmit={(event) => event.preventDefault()}>
       <SearchBox value={filters.q} onSearch={(q) => onChange({ q })} />
-      <label>
+      <label className="records-filter-status">
         סטטוס
         <select
           value={filters.status ?? ""}
@@ -34,15 +34,7 @@ export function RecordsFilters({ filters, onChange }: Props) {
           <option value="approved">מאושר</option>
         </select>
       </label>
-      <label className="records-check">
-        <input
-          type="checkbox"
-          checked={filters.needsReview}
-          onChange={(e) => onChange({ needsReview: e.target.checked })}
-        />
-        רק דורשות בדיקה
-      </label>
-      <label>
+      <label className="records-filter-sender">
         גורם שולח
         <select value={filters.sender} onChange={(e) => onChange({ sender: e.target.value })}>
           <option value="">הכול</option>
@@ -53,7 +45,7 @@ export function RecordsFilters({ filters, onChange }: Props) {
           ))}
         </select>
       </label>
-      <label>
+      <label className="records-filter-form">
         סוג טופס
         <select
           value={filters.formType ?? ""}
@@ -67,14 +59,25 @@ export function RecordsFilters({ filters, onChange }: Props) {
           ))}
         </select>
       </label>
-      <label>
-        מתאריך קבלה
-        <input type="date" value={filters.dateFrom} onChange={(e) => onChange({ dateFrom: e.target.value })} />
-      </label>
-      <label>
-        עד תאריך
-        <input type="date" value={filters.dateTo} onChange={(e) => onChange({ dateTo: e.target.value })} />
-      </label>
+      {/* One range field, so the two dates never end up on different rows. */}
+      <fieldset className="records-dates">
+        <legend>תאריך קבלה</legend>
+        <div className="records-dates-inputs">
+          <input
+            type="date"
+            aria-label="מתאריך קבלה"
+            value={filters.dateFrom}
+            onChange={(e) => onChange({ dateFrom: e.target.value })}
+          />
+          <span aria-hidden="true">–</span>
+          <input
+            type="date"
+            aria-label="עד תאריך קבלה"
+            value={filters.dateTo}
+            onChange={(e) => onChange({ dateTo: e.target.value })}
+          />
+        </div>
+      </fieldset>
     </form>
   );
 }
@@ -97,26 +100,17 @@ function SearchBox({ value, onSearch }: { value: string; onSearch: (q: string) =
   return (
     <label className="records-search">
       חיפוש
-      <input
-        type="search"
-        placeholder="שם, ת״ז, מספר מרכזי או התחייבות"
-        value={draft}
-        onChange={(e) => setDraft(e.target.value)}
-      />
+      <span className="records-search-box">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <path d="M20 20l-4-4M18 11a7 7 0 1 1-14 0 7 7 0 0 1 14 0" />
+        </svg>
+        <input
+          type="search"
+          placeholder="שם, ת״ז, מספר מרכזי או התחייבות"
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+        />
+      </span>
     </label>
   );
-}
-
-/** The closed list of senders, once. Without it the filter still works on links. */
-function useSenders(): string[] {
-  const [senders, setSenders] = useState<string[]>([]);
-  useEffect(() => {
-    const controller = new AbortController();
-    apiFetch<unknown>("/api/v1/senders", { signal: controller.signal }).then(
-      (names) => setSenders(Array.isArray(names) ? names.filter((n) => typeof n === "string") : []),
-      () => {},
-    );
-    return () => controller.abort();
-  }, []);
-  return senders;
 }

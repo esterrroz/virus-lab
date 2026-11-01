@@ -1,5 +1,5 @@
 """Records endpoints: list/search/filter, export, get, patch, approve (one or many),
-delete, page image and the senders list.
+delete, page image, the senders list and the overview numbers.
 
 Only parses the request and calls storage/review.py, which holds the logic.
 The export file itself is written by export/records_export.py.
@@ -15,8 +15,8 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, Depends, Query, Response
 from psycopg_pool import AsyncConnectionPool
 
-from app.api.errors import ProblemError
-from app.auth.deps import get_pool, require_user, utc_now
+from app.api.deps import get_pool, require_user, utc_now
+from app.api.errors import ProblemError, Responses
 from app.clock import israel_today
 from app.export import records_export
 from app.rules.senders import sender_names
@@ -27,9 +27,12 @@ from app.schemas.api import (
     FormType,
     Problem,
     Record,
+    RecordEvent,
     RecordList,
     RecordPatch,
     RecordPatchResponse,
+    RecordSort,
+    RecordStats,
     RecordStatus,
     User,
 )
@@ -42,7 +45,7 @@ router = APIRouter(
     responses={401: {"model": Problem, "description": 'No valid session ("unauthenticated")'}},
 )
 
-_NOT_FOUND = {404: {"model": Problem, "description": "No such record"}}
+_NOT_FOUND: Responses = {404: {"model": Problem, "description": "No such record"}}
 
 
 PoolDep = Annotated[AsyncConnectionPool, Depends(get_pool)]
@@ -73,6 +76,12 @@ class RecordFilters:
     form_type: FormType | None = None
     date_from: Annotated[date | None, Query(description="received_date, inclusive")] = None
     date_to: Annotated[date | None, Query(description="received_date, inclusive")] = None
+    # Not a filter, but the list and the export take it alike, so the file is in the
+    # order the screen shows.
+    sort: Annotated[
+        RecordSort,
+        Query(description='A column, ascending; "-" in front for descending. Empty values last.'),
+    ] = "-created_at"
 
 
 FiltersDep = Annotated[RecordFilters, Depends()]
@@ -86,7 +95,8 @@ async def list_records(
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> RecordList:
-    """Newest first, then page number, then commitment order.
+    """In the `sort` order (newest first by default), then page number, then
+    commitment order.
 
     `status=approved` is also the hand-off point for the lab's system (D6).
     """
@@ -163,6 +173,13 @@ async def get_record(record_id: str, pool: PoolDep) -> Record:
         return await _run(review.get_record(conn, record_id))
 
 
+@router.get("/records/{record_id}/history", responses=_NOT_FOUND)
+async def get_history(record_id: str, pool: PoolDep) -> list[RecordEvent]:
+    """Who did what to the record and when, oldest first. Never the values (D13)."""
+    async with pool.connection() as conn:
+        return await _run(review.get_history(conn, record_id))
+
+
 @router.patch(
     "/records/{record_id}",
     responses={
@@ -225,6 +242,14 @@ async def delete_record(record_id: str, pool: PoolDep) -> Response:
     async with pool.connection() as conn:
         await _run(review.delete_record(conn, record_id))
     return Response(status_code=204)
+
+
+@router.get("/stats")
+async def stats(pool: PoolDep) -> RecordStats:
+    """The overview screen: records left to approve, pending fields still flagged,
+    and how often each field was corrected by hand (from the records' history)."""
+    async with pool.connection() as conn:
+        return await review.get_stats(conn)
 
 
 @router.get("/senders")

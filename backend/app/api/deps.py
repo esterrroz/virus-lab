@@ -1,4 +1,4 @@
-"""FastAPI dependencies: the DB pool, the clock, and require_user.
+"""FastAPI dependencies: the DB pool, the clock, the Origin check and require_user.
 
 Put `user: Annotated[User, Depends(require_user)]` on any endpoint that needs a
 signed-in user. Tests skip it with `app.dependency_overrides[require_user]`.
@@ -34,9 +34,10 @@ def get_pool(request: Request) -> AsyncConnectionPool:
     return pool
 
 
-def check_origin(request: Request, settings: Settings) -> None:
-    """CSRF (Dev-B plan 2.6): a request that changes data must come from our own
-    page. Browsers always send Origin on POST, PATCH and DELETE."""
+def same_origin(request: Request, settings: Annotated[Settings, Depends(get_settings)]) -> None:
+    """A request that changes data must come from our own page, so another site's
+    page can't send changes through a signed-in user's browser (CSRF, Dev-B plan
+    2.6). Browsers always send Origin on POST, PATCH and DELETE."""
     if request.method in _SAFE_METHODS:
         return
     if request.headers.get("origin") != settings.frontend_origin:
@@ -46,14 +47,13 @@ def check_origin(request: Request, settings: Settings) -> None:
 async def require_user(
     request: Request,
     pool: Annotated[AsyncConnectionPool, Depends(get_pool)],
-    settings: Annotated[Settings, Depends(get_settings)],
+    _origin: Annotated[None, Depends(same_origin)],
     now: Annotated[datetime, Depends(utc_now)],
 ) -> User:
     """The signed-in user, or 401. Also checks Origin on a request that changes data.
 
     Takes its own short connection, so a long request (an upload) doesn't hold one.
     """
-    check_origin(request, settings)
     token = request.cookies.get(SESSION_COOKIE)
     user = None
     if token:
