@@ -8,6 +8,7 @@ import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router";
 import { ApiError, apiFetch } from "../../api/client";
 import type { components } from "../../api/schema";
+import { usePageTitle } from "../../shared/usePageTitle";
 import { useSenders } from "../../shared/useSenders";
 import { DocumentPreview } from "../preview/DocumentPreview";
 import { fieldHighlight } from "../preview/previewPages";
@@ -40,6 +41,8 @@ export function RecordPage() {
   const [attempt, setAttempt] = useState(0);
   const request = `${recordId}#${attempt}`;
   const [loaded, setLoaded] = useState<Loaded | null>(null);
+  const shownName = loaded && "record" in loaded ? personName(loaded.record) : "";
+  usePageTitle(shownName ? `רשומה: ${shownName}` : "רשומה");
 
   useEffect(() => {
     const controller = new AbortController();
@@ -99,6 +102,10 @@ export function RecordPage() {
   return <RecordDetails record={loaded.record} backLink={backLink} back={back} onRecord={update} />;
 }
 
+function personName(record: ApiRecord): string {
+  return [record.fields.first_name.value, record.fields.last_name.value].filter(Boolean).join(" ");
+}
+
 interface DetailsProps {
   record: ApiRecord;
   backLink: ReactNode;
@@ -122,7 +129,7 @@ function RecordDetails({ record, backLink, back, onRecord }: DetailsProps) {
   const history = useRecordHistory(record.record_id, record.version);
   const more = record.continuation_pages ?? [];
   const editable = record.status === "pending";
-  const name = [record.fields.first_name.value, record.fields.last_name.value].filter(Boolean).join(" ");
+  const name = personName(record);
   const rows: { title: string; field: FormField; onSave: (edit: FieldEdit) => Promise<Saved> }[] = [
     ...FIELD_COLUMNS.map((c) => ({
       title: c.title,

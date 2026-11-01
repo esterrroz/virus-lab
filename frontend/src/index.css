@@ -1,5 +1,7 @@
 /* Base page styles. Design tokens live in shared/ui/tokens.css. Use logical properties (RTL). */
 
+/* Light only: tokens.css has no dark values, so a dark system theme would put the
+   browser's dark background behind dark text. */
 :root {
   font-family: Assistant, Heebo, Rubik, 'Segoe UI', system-ui, Arial, sans-serif;
   line-height: 1.5;
@@ -52,4 +54,19 @@ body {
   .review-approve button:hover {
     transform: none;
   }
+}
+
+/* Moving focus to <main> after a route change shows no ring: it isn't a control. */
+main:focus {
+  outline: none;
+}
+
+/* Read by screen readers, not shown. */
+.visually-hidden {
+  position: absolute;
+  inline-size: 1px;
+  block-size: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }

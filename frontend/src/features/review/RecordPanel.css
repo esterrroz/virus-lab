@@ -354,3 +354,14 @@
 .record-panel-fields .review-cell.is-flagged::before {
   content: none;
 }
+
+.record-panel-title:focus {
+  outline: none;
+}
+
+@media (pointer: coarse) {
+  .record-panel-toggle,
+  .record-panel-next {
+    min-block-size: 44px;
+  }
+}

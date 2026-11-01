@@ -4,7 +4,7 @@
 // boxed on the page, where the model read it (field boxes).
 // Owner: B
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useSenders } from "../../shared/useSenders";
 import { DocumentPreview } from "../preview/DocumentPreview";
 import { fieldHighlight } from "../preview/previewPages";
@@ -28,6 +28,8 @@ interface RecordPanelProps {
   onRecords: (records: ApiRecord[]) => void;
   /** A record deleted on the server: take it off. */
   onRemoved: (recordId: string) => void;
+  /** Grows each time a row is picked in the list. */
+  reveal?: number;
   /** Approve and delete with "undo" (useUndo): the page sends them later. Without
    *  these, approve and delete go to the server at once, delete after asking. */
   onApproveLater?: (record: ApiRecord) => void;
@@ -35,6 +37,9 @@ interface RecordPanelProps {
   /** Approved on screen, waiting for its "undo" to run out. */
   approvingId?: string | null;
 }
+
+// Matches ReviewPage.css: below this width the panel sits under the list.
+const STACKED = "(max-width: 900px)";
 
 export function RecordPanel({
   record,
@@ -45,12 +50,22 @@ export function RecordPanel({
   onApproveLater,
   onDeleteLater,
   approvingId = null,
+  reveal = 0,
 }: RecordPanelProps) {
   const { saveField, saveCentrals, approve, remove } = useRecordMutations(onRecords);
   const senders = useSenders();
   const [expanded, setExpanded] = useState(false);
+  const title = useRef<HTMLHeadingElement>(null);
   const { focused, rowProps, areaProps } = useFieldFocus<FieldName | "central_numbers">(record?.record_id ?? "");
   const fields = useRef<HTMLTableElement>(null);
+
+  // Under the list, a picked row would change nothing in sight: bring the panel up,
+  // and move the focus to its title so a screen reader reads the record.
+  useEffect(() => {
+    if (reveal === 0 || !window.matchMedia?.(STACKED).matches) return;
+    title.current?.scrollIntoView?.({ block: "start" });
+    title.current?.focus({ preventScroll: true });
+  }, [reveal]);
 
   if (record === null) {
     return (
@@ -79,7 +94,7 @@ export function RecordPanel({
   return (
     <aside className="record-panel" aria-labelledby="record-panel-title">
       <div className="record-panel-head">
-        <h2 id="record-panel-title" className="record-panel-title">
+        <h2 id="record-panel-title" className="record-panel-title" ref={title} tabIndex={-1}>
           <bdi>{name || "ללא שם"}</bdi>
         </h2>
         <span className="review-count">
@@ -126,6 +141,7 @@ export function RecordPanel({
                     editable={editable}
                     onSave={(edit) => saveField(record, c.name, edit)}
                     options={c.name === "sender" && senders.length > 0 ? senders : undefined}
+                    showIssues
                     check={c.name === "national_id" ? idProblem : undefined}
                   />
                 </tr>
@@ -136,6 +152,7 @@ export function RecordPanel({
                   items={record.central_numbers}
                   editable={editable}
                   onSave={(items) => saveCentrals(record, items)}
+                  showIssues
                 />
               </tr>
             </tbody>

@@ -2,11 +2,23 @@
 // navigation, who is signed in, and sign-out (PLAN-DEV-B 3.0, "כללי").
 // Owner: B
 
-import { Link, NavLink, Outlet, useNavigate } from "react-router";
+import { useEffect, useRef } from "react";
+import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router";
 import { useAuth } from "../../features/auth/authContext";
 import "./Layout.css";
 
 export function Layout() {
+  const { pathname } = useLocation();
+  const main = useRef<HTMLElement>(null);
+  const shown = useRef(pathname);
+  // A new screen moves the focus to its content, so a screen reader hears that the
+  // screen changed and Tab starts there. Not on first load, and not when only the
+  // filters in the URL change.
+  useEffect(() => {
+    if (shown.current === pathname) return;
+    shown.current = pathname;
+    main.current?.focus();
+  }, [pathname]);
   const { state, logout } = useAuth();
   const navigate = useNavigate();
   const name = state.status === "signed_in" ? state.user.display_name : "";
@@ -15,7 +27,6 @@ export function Layout() {
     await logout().catch(() => {}); // signed out on this screen either way
     navigate("/login", { replace: true });
   }
-
   return (
     <div className="layout">
       <header className="layout-bar">
@@ -55,7 +66,7 @@ export function Layout() {
           </button>
         </span>
       </header>
-      <main className="layout-main">
+      <main className="layout-main" ref={main} tabIndex={-1}>
         <Outlet />
       </main>
     </div>

@@ -10,6 +10,7 @@
 // Owner: B
 
 import { useCallback, useState } from "react";
+import { usePageTitle } from "../../shared/usePageTitle";
 import { useRecordMutations, type ApiRecord } from "./recordMutations";
 import { UploadPanel } from "../upload/UploadPanel";
 import { RecordPanel } from "./RecordPanel";
@@ -24,8 +25,10 @@ import "./ReviewPage.css";
 type View = "auto" | "upload" | "review";
 
 export function ReviewPage() {
+  usePageTitle("העלאה ובדיקה");
   const [allRecords, setRecords] = useState<ApiRecord[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [reveal, setReveal] = useState(0); // grows with each row picked in the list
   const [busy, setBusy] = useState(false);
   const [view, setView] = useState<View>("auto");
   // What waits for its "undo": an approve shows as approved, a delete is hidden.
@@ -40,6 +43,10 @@ export function ReviewPage() {
     (changed: ApiRecord[]) => setRecords((current) => replaceRecords(current, changed)),
     [],
   );
+  const pick = useCallback((recordId: string, show: boolean) => {
+    setSelectedId(recordId);
+    if (show) setReveal((n) => n + 1);
+  }, []);
   const { approve, remove } = useRecordMutations(onRecords);
   const undo = useUndo();
   const onRemoved = useCallback((recordId: string) => {
@@ -96,6 +103,8 @@ export function ReviewPage() {
 
   return (
     <div className={showReview ? "review-page is-review" : "review-page is-upload"}>
+      {/* The nav already shows the screen's name; the heading is for screen readers. */}
+      <h1 className="visually-hidden">העלאה ובדיקה</h1>
       <div className="review-page-head">
         <ol className="review-steps" aria-label="שלבים">
           <li className={showReview ? "is-done" : "is-current"} aria-current={showReview ? undefined : "step"}>
@@ -154,7 +163,7 @@ export function ReviewPage() {
         <ReviewTable
           records={records}
           selectedId={selected?.record_id ?? null}
-          onSelect={setSelectedId}
+          onSelect={pick}
           onRecords={onRecords}
           approvingId={approvingId}
           onUpload={() => setView("upload")}
@@ -165,6 +174,7 @@ export function ReviewPage() {
           onSelect={setSelectedId}
           onRecords={onRecords}
           onRemoved={onRemoved}
+          reveal={reveal}
           onApproveLater={approveLater}
           onDeleteLater={deleteLater}
           approvingId={approvingId}
