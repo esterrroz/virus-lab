@@ -171,7 +171,12 @@ async def extract_files(
         async with semaphore:
             outcome = await call(page, split=True)
             if isinstance(outcome, _Split):
-                called = [await call(part, split=False) for part in outcome.parts]
+                called: list[_Called | FailedPage] = []
+                for part in outcome.parts:
+                    part_outcome = await call(part, split=False)
+                    if isinstance(part_outcome, _Split):
+                        raise RuntimeError("a split form cannot be split again")
+                    called.append(part_outcome)
             else:
                 called = [outcome]
         # Outside the semaphore: it limits model calls, and these are not.
