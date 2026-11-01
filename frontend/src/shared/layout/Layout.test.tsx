@@ -7,6 +7,7 @@ import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Link, MemoryRouter, Route, Routes } from "react-router";
 import { afterEach, describe, expect, test } from "vitest";
+import { AuthContext } from "../../features/auth/authContext";
 import { usePageTitle } from "../usePageTitle";
 import { Layout } from "./Layout";
 
@@ -24,14 +25,23 @@ function Screen({ name }: { name: string }) {
 
 function renderApp() {
   render(
-    <MemoryRouter initialEntries={["/"]}>
-      <Routes>
-        <Route element={<Layout />}>
-          <Route index element={<Screen name="העלאה ובדיקה" />} />
-          <Route path="records" element={<Screen name="רשומות" />} />
-        </Route>
-      </Routes>
-    </MemoryRouter>,
+    <AuthContext.Provider
+      value={{
+        state: { status: "signed_in", user: { id: "u1", username: "dana", display_name: "דנה" } },
+        login: async () => {},
+        logout: async () => {},
+        retry: () => {},
+      }}
+    >
+      <MemoryRouter initialEntries={["/"]}>
+        <Routes>
+          <Route element={<Layout />}>
+            <Route index element={<Screen name="העלאה ובדיקה" />} />
+            <Route path="records" element={<Screen name="רשומות" />} />
+          </Route>
+        </Routes>
+      </MemoryRouter>
+    </AuthContext.Provider>,
   );
   return userEvent.setup();
 }

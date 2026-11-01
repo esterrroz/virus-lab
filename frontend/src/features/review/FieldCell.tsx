@@ -20,9 +20,19 @@ interface FieldCellProps {
   options?: string[];
   /** The issues as text under the value, not only in the cell's title (touch, keyboard, screen readers). */
   showIssues?: boolean;
+  /** A check while typing (the ID's check digit): the problem, or null. Saving still works. */
+  check?: (text: string) => string | null;
 }
 
-export function FieldCell({ title, field, editable, onSave, options, showIssues = false }: FieldCellProps) {
+export function FieldCell({
+  title,
+  field,
+  editable,
+  onSave,
+  options,
+  showIssues = false,
+  check,
+}: FieldCellProps) {
   const cell = fieldCell(field);
   const issuesId = useId();
   const issues = showIssues && cell.issues.length > 0;
@@ -31,6 +41,8 @@ export function FieldCell({ title, field, editable, onSave, options, showIssues 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const cancelled = useRef(false);
+  const hintId = useId();
+  const problem = draft !== null && !options && check ? check(draft) : null;
 
   async function save(edit: FieldEdit, keepOpen: boolean) {
     setBusy(true);
@@ -77,7 +89,7 @@ export function FieldCell({ title, field, editable, onSave, options, showIssues 
         <select
           className="review-cell-input"
           aria-label={`עריכת ${title}`}
-          aria-describedby={describedBy}
+          aria-describedby={[describedBy, check ? hintId : undefined].filter(Boolean).join(" ") || undefined}
           value={draft}
           disabled={busy}
           autoFocus
@@ -105,9 +117,10 @@ export function FieldCell({ title, field, editable, onSave, options, showIssues 
         </select>
       ) : draft !== null ? (
         <input
-          className="review-cell-input"
+          className={problem ? "review-cell-input is-invalid" : "review-cell-input"}
           aria-label={`עריכת ${title}`}
-          aria-describedby={describedBy}
+          aria-invalid={problem ? true : undefined}
+          aria-describedby={[describedBy, check ? hintId : undefined].filter(Boolean).join(" ") || undefined}
           value={draft}
           disabled={busy}
           autoFocus
@@ -134,6 +147,12 @@ export function FieldCell({ title, field, editable, onSave, options, showIssues 
         </button>
       ) : (
         content
+      )}
+      {check && draft !== null && !options && (
+        // Always there while editing, so screen readers hear a problem as it shows.
+        <span id={hintId} className="review-cell-hint" aria-live="polite">
+          {problem}
+        </span>
       )}
       {draft === null && editable && field.needs_review && (
         // The value is right as it is: the flag goes, the issue stays shown.

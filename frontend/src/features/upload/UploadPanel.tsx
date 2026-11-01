@@ -2,12 +2,22 @@
 // Owner: A
 
 import { useEffect, useRef, useState, type DragEvent } from "react";
-import { useExtract, type ExtractResponse, type FileStatus, type UploadItem } from "./useExtract";
+import {
+  hasUnsentFiles,
+  progressText,
+  useExtract,
+  type ExtractResponse,
+  type FileStatus,
+  type Progress,
+  type UploadItem,
+} from "./useExtract";
 import "./UploadPanel.css";
 
 interface UploadPanelProps {
-  // Called once per file, as soon as that file's 200 answer arrives.
+  // Called once per file, as soon as the server has finished reading it.
   onResult: (result: ExtractResponse) => void;
+  // Called when files start or stop being sent: true while any is queued or sending.
+  onBusyChange?: (busy: boolean) => void;
 }
 
 const STATUS_TEXT: Record<FileStatus, string> = {
@@ -23,6 +33,30 @@ const STATUS_TEXT: Record<FileStatus, string> = {
 function recordsText(n: number) {
   return n === 1 ? "רשומה אחת" : `${n} רשומות`;
 }
+
+// The file's kind, for the small colored badge beside its name.
+function fileKind(name: string): "pdf" | "jpg" | "png" | "file" {
+  const ext = name.split(".").pop()?.toLowerCase();
+  if (ext === "pdf") return "pdf";
+  if (ext === "jpg" || ext === "jpeg") return "jpg";
+  if (ext === "png") return "png";
+  return "file";
+}
+
+function FileKind({ name }: { name: string }) {
+  const kind = fileKind(name);
+  return (
+    <span className={`upload-name-kind is-${kind}`} aria-hidden="true">
+      {kind === "file" ? "" : kind.toUpperCase()}
+    </span>
+  );
+}
+
+const TIPS = [
+  { kind: "blue", title: "כמה קבצים בבת אחת", text: "כל קובץ נקרא בנפרד", icon: <><rect x="7" y="3" width="13" height="15" rx="2" /><path d="M4 7v12a2 2 0 0 0 2 2h10" /></> },
+  { kind: "teal", title: "גם כתב יד", text: "שבעה שדות מכל טופס", icon: <><path d="M4 20h4L19 9l-4-4L4 16z" /><path d="m13 7 4 4" /></> },
+  { kind: "green", title: "ואז בודקים ומאשרים", text: "כל שדה ליד הטופס המקורי", icon: <path d="M5 12.5 10 17l9-10" /> },
+];
 
 function StatusIcon({ status }: { status: FileStatus }) {
   const common = {
@@ -52,9 +86,19 @@ function StatusIcon({ status }: { status: FileStatus }) {
   }
 }
 
-function elapsed(ms: number) {
-  const s = Math.max(0, Math.floor(ms / 1000));
-  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+// The pages read so far and a bar; no clock (22.10). Hidden from screen readers:
+// in the aria-live list, the page count would be read out at every change.
+function Sending({ progress }: { progress?: Progress }) {
+  const pages = progressText(progress);
+  if (!pages || !progress) return null;
+  return (
+    <span className="upload-sending" aria-hidden="true">
+      {pages}
+      <span className="upload-progress">
+        <span className="upload-progress-bar" style={{ inlineSize: `${(100 * progress.done) / progress.total}%` }} />
+      </span>
+    </span>
+  );
 }
 
 function detail(item: UploadItem) {
@@ -69,19 +113,15 @@ function detail(item: UploadItem) {
   return parts.join(" · ");
 }
 
-export function UploadPanel({ onResult }: UploadPanelProps) {
+export function UploadPanel({ onResult, onBusyChange }: UploadPanelProps) {
   const { items, add, retry } = useExtract(onResult);
   const input = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
-  const [now, setNow] = useState(() => Date.now());
-  const isSending = items.some((i) => i.status === "sending");
+  const isBusy = hasUnsentFiles(items);
 
-  // A file can take minutes; the clock shows it is still being read.
   useEffect(() => {
-    if (!isSending) return;
-    const id = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(id);
-  }, [isSending]);
+    onBusyChange?.(isBusy);
+  }, [isBusy, onBusyChange]);
 
   const onDrop = (e: DragEvent) => {
     e.preventDefault();
@@ -95,41 +135,79 @@ export function UploadPanel({ onResult }: UploadPanelProps) {
   const interrupted = items.some((i) => i.status === "interrupted");
 
   return (
-    <section className="upload" aria-labelledby="upload-title">
-      <h2 id="upload-title" className="upload-title">העלאת טפסים</h2>
-
-      <div
-        className={dragging ? "upload-drop is-dragging" : "upload-drop"}
-        onDragOver={(e) => {
-          e.preventDefault();
-          setDragging(true);
-        }}
-        onDragLeave={() => setDragging(false)}
-        onDrop={onDrop}
-      >
-        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-          <path d="M12 16V4" />
-          <path d="m6 10 6-6 6 6" />
-          <path d="M4 20h16" />
-        </svg>
-        <p className="upload-drop-text">גררי לכאן קבצי PDF או תמונות (JPG, PNG), קובץ אחד או כמה</p>
-        <button type="button" className="upload-button" onClick={() => input.current?.click()}>
-          בחירת קבצים
-        </button>
-        <input
-          ref={input}
-          type="file"
-          multiple
-          accept=".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png"
-          className="upload-input"
-          tabIndex={-1}
-          aria-hidden="true"
-          onChange={(e) => {
-            add(Array.from(e.target.files ?? []));
-            e.target.value = "";
-          }}
-        />
+    <section className={items.length > 0 ? "upload has-files" : "upload"} aria-labelledby="upload-title">
+      <div className="upload-hero">
+        <h2 id="upload-title" className="upload-title">
+          <span className="upload-title-accent">העלאת טפסי התחייבות</span>
+        </h2>
+        <p className="upload-lead">מעלים את הקבצים, והמערכת קוראת מכל טופס את הנתונים. כל ערך מפוקפק יסומן לבדיקה.</p>
       </div>
+
+      <div className="upload-card">
+        <div
+          className={dragging ? "upload-drop is-dragging" : "upload-drop"}
+          onDragOver={(e) => {
+            e.preventDefault();
+            setDragging(true);
+          }}
+          onDragLeave={() => setDragging(false)}
+          onDrop={onDrop}
+        >
+          <span className="upload-drop-ring" aria-hidden="true">
+            <svg className="upload-drop-icon" width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M12 16V4" />
+              <path d="m6 10 6-6 6 6" />
+              <path d="M4 20h16" />
+            </svg>
+          </span>
+          <p className="upload-drop-text">גררי לכאן קבצי PDF או תמונות</p>
+          <p className="upload-drop-hint">קובץ אחד או כמה בבת אחת</p>
+          <ul className="upload-kinds" aria-label="סוגי קבצים">
+            <li className="upload-kind is-pdf">PDF</li>
+            <li className="upload-kind is-jpg">JPG</li>
+            <li className="upload-kind is-png">PNG</li>
+          </ul>
+          <button type="button" className="upload-button" onClick={() => input.current?.click()}>
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" />
+              <path d="M14 3v5h5" />
+              <path d="M12 12v6M9 15h6" />
+            </svg>
+            בחירת קבצים
+          </button>
+          <input
+            ref={input}
+            type="file"
+            multiple
+            accept=".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png"
+            className="upload-input"
+            tabIndex={-1}
+            aria-hidden="true"
+            onChange={(e) => {
+              add(Array.from(e.target.files ?? []));
+              e.target.value = "";
+            }}
+          />
+        </div>
+      </div>
+
+      {items.length === 0 && (
+        <ul className="upload-tips">
+          {TIPS.map((tip) => (
+            <li key={tip.title} className="upload-tip">
+              <span className={`upload-tip-icon is-${tip.kind}`}>
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  {tip.icon}
+                </svg>
+              </span>
+              <span className="upload-tip-text">
+                <strong>{tip.title}</strong>
+                <span>{tip.text}</span>
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
 
       {interrupted && (
         <p className="upload-alert" role="alert">
@@ -138,10 +216,13 @@ export function UploadPanel({ onResult }: UploadPanelProps) {
       )}
 
       {items.length > 0 && (
-        <>
-          <p className="upload-summary">
-            {finished} מתוך {items.length} קבצים · נוצרו {recordsText(records)}
-          </p>
+        <div className="upload-files">
+          <div className="upload-files-head">
+            <h3 className="upload-files-title">הקבצים שלך</h3>
+            <p className="upload-summary">
+              {finished} מתוך {items.length} קבצים · נוצרו {recordsText(records)}
+            </p>
+          </div>
           <ul className="upload-list" aria-live="polite">
             {items.map((item) => (
               <li key={item.key} className={`upload-item is-${item.status}`}>
@@ -149,12 +230,13 @@ export function UploadPanel({ onResult }: UploadPanelProps) {
                   <StatusIcon status={item.status} />
                   {STATUS_TEXT[item.status]}
                 </span>
-                <span className="upload-name"><bdi>{item.file.name}</bdi></span>
+                <span className="upload-name">
+                  <FileKind name={item.file.name} />
+                  <bdi>{item.file.name}</bdi>
+                </span>
                 <span className="upload-detail">
-                  {item.status === "sending" && item.startedAt ? (
-                    // Hidden from screen readers: in the aria-live list, the clock
-                    // would be read out every second.
-                    <span aria-hidden="true">{elapsed(now - item.startedAt)}</span>
+                  {item.status === "sending" ? (
+                    <Sending progress={item.progress} />
                   ) : (
                     detail(item)
                   )}
@@ -167,7 +249,7 @@ export function UploadPanel({ onResult }: UploadPanelProps) {
               </li>
             ))}
           </ul>
-        </>
+        </div>
       )}
 
       {failedPages.length > 0 && (

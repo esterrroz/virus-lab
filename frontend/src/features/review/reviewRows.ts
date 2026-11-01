@@ -6,7 +6,7 @@ import type { components } from "../../api/schema";
 
 type ApiRecord = components["schemas"]["Record"];
 type FormField = components["schemas"]["FormField"];
-type FieldName = keyof components["schemas"]["RecordFields"];
+export type FieldName = keyof components["schemas"]["RecordFields"];
 
 // Records from /extract join the table as each file's answer arrives. A record
 // that is already there (same record_id) is replaced in place, so a newer copy
@@ -111,6 +111,21 @@ export function nextToFix(records: ApiRecord[], currentId: string): ApiRecord | 
   for (let step = 1; step <= records.length; step++) {
     const r = records[(start + step) % records.length];
     if (r.record_id !== currentId && r.status === "pending" && blockingFields(r).length > 0) return r;
+  }
+  return null;
+}
+
+/**
+ * Where to go after approving or deleting a record: the next one to fix, else the
+ * next one still pending, else none (the current one stays open).
+ */
+export function nextAfter(records: ApiRecord[], currentId: string): ApiRecord | null {
+  const toFix = nextToFix(records, currentId);
+  if (toFix) return toFix;
+  const start = records.findIndex((r) => r.record_id === currentId);
+  for (let step = 1; step < records.length; step++) {
+    const r = records[(start + step) % records.length];
+    if (r.status === "pending") return r;
   }
   return null;
 }

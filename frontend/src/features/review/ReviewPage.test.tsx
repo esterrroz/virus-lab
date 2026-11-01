@@ -5,19 +5,34 @@
 // over the records.
 // Owner: B
 
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { act, cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import type { ApiRecord } from "./recordMutations";
 import { ReviewPage } from "./ReviewPage";
 import { field, flagged, record } from "./testRecords";
+import { UNDO_MS } from "./useUndo";
 
 const uploaded = vi.hoisted(() => ({ records: [] as unknown[] }));
 vi.mock("../upload/UploadPanel", () => ({
-  UploadPanel: ({ onResult }: { onResult: (result: { records: unknown[] }) => void }) => (
-    <button type="button" onClick={() => onResult({ records: uploaded.records })}>
-      העלאה
-    </button>
+  UploadPanel: ({
+    onResult,
+    onBusyChange,
+  }: {
+    onResult: (result: { records: unknown[] }) => void;
+    onBusyChange?: (busy: boolean) => void;
+  }) => (
+    <>
+      <button type="button" onClick={() => onResult({ records: uploaded.records })}>
+        העלאה
+      </button>
+      <button type="button" onClick={() => onBusyChange?.(true)}>
+        שליחה
+      </button>
+      <button type="button" onClick={() => onBusyChange?.(false)}>
+        סוף שליחה
+      </button>
+    </>
   ),
 }));
 
@@ -29,12 +44,25 @@ beforeEach(() => {
 });
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
 
 const reply = (body: unknown) =>
   new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
+
+/** As upload, on a fake clock, for the few seconds approve and delete wait to be undone. */
+async function uploadOnClock(records: ApiRecord[]) {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  uploaded.records = records;
+  render(<ReviewPage />);
+  const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+  await user.click(screen.getByRole("button", { name: "העלאה" }));
+  return user;
+}
+
+const sent = (method: string) => fetchMock.mock.calls.some(([, init]) => init?.method === method);
 
 async function upload(records: ApiRecord[]) {
   uploaded.records = records;
@@ -57,6 +85,29 @@ const toFix = (over: Partial<ApiRecord> = {}) =>
 const panel = () => screen.getByRole("complementary");
 
 describe("ReviewPage", () => {
+  test("the upload shows first, and the list replaces it once every file is read", async () => {
+    uploaded.records = [record()];
+    render(<ReviewPage />);
+    const user = userEvent.setup();
+    expect(screen.queryByRole("complementary")).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "שליחה" }));
+    await user.click(screen.getByRole("button", { name: "העלאה" }));
+    // Still reading: the upload stays, with a way to the records read so far.
+    expect(screen.queryByRole("complementary")).toBeNull();
+    expect(screen.getByRole("button", { name: "לרשומות שכבר נקראו (1) ←" })).toBeTruthy();
+
+    await user.click(screen.getByRole("button", { name: "סוף שליחה" }));
+    expect(within(panel()).getByRole("heading", { name: "דנה לוי" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "העלאה" })).toBeNull();
+
+    // Back to the upload for more files, then on to the list again.
+    await user.click(screen.getByRole("button", { name: "+ העלאת קבצים נוספים" }));
+    expect(screen.queryByRole("complementary")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "לרשימת הרשומות (1) ←" }));
+    expect(panel()).toBeTruthy();
+  });
+
   test("the first record opens in the panel, and a row click opens another", async () => {
     const user = await upload([record(), named("יוסי", "כהן", { record_id: "r2" })]);
 
@@ -97,31 +148,95 @@ describe("ReviewPage", () => {
     expect(within(row2).getByText("011223344")).toBeTruthy();
   });
 
-  test("a pending record is deleted after asking, and the next one opens", async () => {
+  test("delete hides the record at once, opens the next, and is sent once its undo runs out", async () => {
     fetchMock.mockImplementation(async (_url, init) =>
       init?.method === "DELETE" ? new Response(null, { status: 204 }) : reply([]),
     );
-    const ask = vi.spyOn(window, "confirm").mockReturnValue(true);
-    const user = await upload([record(), named("יוסי", "כהן", { record_id: "r2" })]);
+    const ask = vi.spyOn(window, "confirm").mockReturnValue(false);
+    const user = await uploadOnClock([record(), named("יוסי", "כהן", { record_id: "r2" })]);
 
     await user.click(within(panel()).getByRole("button", { name: "מחיקה" }));
 
-    expect(ask.mock.calls[0][0]).toContain("למחוק את הרשומה של דנה לוי");
+    expect(ask).not.toHaveBeenCalled(); // "ביטול" replaces the question
+    expect(screen.queryByText("דנה לוי")).toBeNull();
+    expect(within(panel()).getByRole("heading", { name: "יוסי כהן" })).toBeTruthy();
+    expect(screen.getByText("הרשומה של דנה לוי נמחקה")).toBeTruthy();
+    expect(sent("DELETE")).toBe(false);
+
+    await act(() => vi.advanceTimersByTimeAsync(UNDO_MS));
+
     expect(fetchMock.mock.calls.some(([url, init]) => url === "/api/v1/records/r1" && init?.method === "DELETE")).toBe(
       true,
     );
-    expect(screen.queryByText("דנה לוי")).toBeNull();
-    expect(within(panel()).getByRole("heading", { name: "יוסי כהן" })).toBeTruthy();
+    expect(screen.queryByText("הרשומה של דנה לוי נמחקה")).toBeNull();
   });
 
-  test("saying no deletes nothing", async () => {
-    vi.spyOn(window, "confirm").mockReturnValue(false);
-    const user = await upload([record()]);
+  test("undo brings a deleted record back and deletes nothing", async () => {
+    const user = await uploadOnClock([record(), named("יוסי", "כהן", { record_id: "r2" })]);
 
     await user.click(within(panel()).getByRole("button", { name: "מחיקה" }));
+    await user.click(screen.getByRole("button", { name: "ביטול" }));
+    await act(() => vi.advanceTimersByTimeAsync(UNDO_MS));
 
-    expect(fetchMock.mock.calls.some(([, init]) => init?.method === "DELETE")).toBe(false);
+    expect(sent("DELETE")).toBe(false);
     expect(within(panel()).getByRole("heading", { name: "דנה לוי" })).toBeTruthy();
+  });
+
+  test("approve opens the next record to fix, counts it, and is sent once its undo runs out", async () => {
+    fetchMock.mockImplementation(async (url) =>
+      String(url).endsWith("/approve") ? reply(record({ status: "approved", version: 2 })) : reply([]),
+    );
+    const user = await uploadOnClock([record(), toFix({ record_id: "r2", fields: named("יוסי", "כהן").fields })]);
+    expect(screen.getByText("0 מתוך 2 אושרו")).toBeTruthy();
+
+    await user.click(within(panel()).getByRole("button", { name: "אישור" }));
+
+    expect(within(panel()).getByRole("heading", { name: "יוסי כהן" })).toBeTruthy();
+    expect(screen.getByText("1 מתוך 2 אושרו")).toBeTruthy();
+    expect(screen.getByText("✓ אושר")).toBeTruthy(); // the list row
+    expect(sent("POST")).toBe(false);
+
+    await act(() => vi.advanceTimersByTimeAsync(UNDO_MS));
+
+    expect(fetchMock.mock.calls.some(([url]) => url === "/api/v1/records/r1/approve")).toBe(true);
+    expect(screen.getByText("1 מתוך 2 אושרו")).toBeTruthy();
+  });
+
+  test("undo of an approve sends nothing and opens the record again", async () => {
+    const user = await uploadOnClock([record(), toFix({ record_id: "r2" })]);
+
+    await user.click(within(panel()).getByRole("button", { name: "אישור" }));
+    await user.click(screen.getByRole("button", { name: "ביטול" }));
+    await act(() => vi.advanceTimersByTimeAsync(UNDO_MS));
+
+    expect(sent("POST")).toBe(false);
+    expect(within(panel()).getByRole("button", { name: "אישור" })).toBeTruthy();
+    expect(screen.getByText("0 מתוך 2 אושרו")).toBeTruthy();
+  });
+
+  test("a flagged record lists what is left, and a click opens that field", async () => {
+    const user = await upload([toFix()]);
+
+    expect(within(panel()).getByText(/נשאר שדה אחד לתיקון/)).toBeTruthy();
+    await user.click(within(panel()).getByRole("button", { name: "ת״ז" }));
+
+    expect(document.activeElement).toBe(within(panel()).getByRole("textbox", { name: "עריכת ת״ז" }));
+  });
+
+  test("with every record deleted, the empty list leads back to the upload", async () => {
+    fetchMock.mockImplementation(async (_url, init) =>
+      init?.method === "DELETE" ? new Response(null, { status: 204 }) : reply([]),
+    );
+    const user = await uploadOnClock([record()]);
+    // Pinned to the list, so it stays when it empties.
+    await user.click(screen.getByRole("button", { name: "+ העלאת קבצים נוספים" }));
+    await user.click(screen.getByRole("button", { name: "לרשימת הרשומות (1) ←" }));
+
+    await user.click(within(panel()).getByRole("button", { name: "מחיקה" }));
+    await act(() => vi.advanceTimersByTimeAsync(UNDO_MS));
+    await user.click(screen.getByRole("button", { name: "העלאת טפסים" }));
+
+    expect(screen.getByRole("button", { name: "העלאה" })).toBeTruthy();
   });
 
   test("an approved record is read-only in the panel", async () => {
