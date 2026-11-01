@@ -31,4 +31,3 @@ export function useRecordHistory(recordId: string, version: number): History {
 
   return loaded.key === key ? loaded.history : null;
 }
-

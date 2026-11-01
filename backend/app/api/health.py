@@ -7,6 +7,10 @@ readings, and one with the cache on would keep patients' readings on its disk.
 The number of keys, never a key: a server showing 1 has not picked up
 GEMINI_API_KEYS.
 
+Open without the site password (app/site_password.py): Render's health check
+and the keep-alive ping call it without one. It reports whether the site password
+is enabled, never the password itself.
+
 It checks the database too, since Render's health check (render.yaml) calls this
 path: a server whose database is down answers 503, so Render doesn't call it
 healthy. Without DATABASE_URL (locally, the CI image check) the database is "off"
@@ -59,6 +63,9 @@ async def health(
         "gemini_keys": len(settings.gemini_keys())
         if settings.extraction_provider == "gemini"
         else 0,
+        # Whether the site asks for SITE_PASSWORD, never the password: a live server
+        # showing false is open to anyone with the link.
+        "site_password": bool(settings.site_password.get_secret_value()),
     }
 
 
